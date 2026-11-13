@@ -29,6 +29,9 @@ foreshadowing_paid: <F-ids paid off here, or ->
 - Load only: this contract + hard facts + the slices it names (last 1–3 full
   chapters, rolling summaries, related chapters by foreshadowing / character /
   status-change / relationship). Never dump the whole book.
+- If the previous chapter ended on a hook, this contract must state how this
+  chapter's opening resolves it. A `transition: cut` does not excuse dropping
+  the previous hook — see SKILL.md hard rule 11.
 - Hard constraints are restated here before writing (copy them from
   `bible/rules.md` — do not paraphrase them away).
 - A character may guess, suspect or misread — never *know* what they were

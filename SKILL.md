@@ -55,6 +55,12 @@ not exist in canon.
    truth. Summaries and indexes are derived projections — never hand-edited.
 10. **Rolling horizon, not a 500-chapter outline.** Only the next arc is planned in
     detail; the far future keeps a direction (compass) + the foreshadowing ledger.
+11. **Hook handoff (blocking).** The next chapter's contract must state how its
+    opening resolves the previous chapter's end hook (paid off, carried, or
+    explicitly deferred with a payoff chapter). A cut transition does not excuse
+    dropping the previous hook: a chapter that opens as if the previous
+    chapter's end hook never happened fails the continuity audit, however well
+    written its own scenes are.
 
 ## Book project layout (created by `init`, see below)
 
@@ -88,7 +94,7 @@ Write chapters 1–3 by the chapter-contract loop (Step 3), read them as a reade
 diagnose, fix the contract — not the prose alone — then decide whether to continue.
 
 ### Step 3 — Chapter loop (repeat; Gate 3 per chapter)
-1. **Contract:** fill `templates/chapter_contract.md` (incl. `transition` to the next chapter).
+1. **Contract:** fill `templates/chapter_contract.md` (incl. `transition` to the next chapter, and how this chapter's opening resolves the previous chapter's end hook — hard rule 11).
 2. **Draft:** one writer owns all prose (voice consistency). Load only the contract
    + hard facts + needed slices.
 3. **Sub-review:** a separate reviewer pass runs the checks (`scripts/check_chapter.py`,

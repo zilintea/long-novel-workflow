@@ -101,7 +101,23 @@ data/genres/              # fanqie_urban、fanqie_rebirth_revenge、royalroad_li
 data/slop/                # zh.yaml、en.yaml（去 AI 味词表）
 checklists/               # chapter_audit.md、continuity_audit.md
 examples/sample-book/     # 完整小原创样书工程（bible/outline/state/chapters 001–003）
+mcp-server/               # MCP 服务器（stdio + streamable HTTP）——见 mcp-server/README.md
 ```
 
 技能仓库和书工程是分开的：技能在一个文件夹，每本书是自己的一套
 `bible/outline/state/chapters/`。见 `docs/CONTINUITY.md`。
+
+## MCP 服务器（WorkBuddy / 豆包）
+
+`mcp-server/` 是这个技能的 MCP 服务器（Node.js，不调任何模型）：
+把书的状态机做成 14 个工具——列书 / 读章节、起草合同（含阻断式钩子
+交接规则）、存草稿、跑确定性审计、原子提交 / 回滚、伏笔台账——走
+stdio（WorkBuddy、Claude、Cursor）和 streamable HTTP（豆包桌面版，
+`http://127.0.0.1:8765/mcp`）。书留在你自己的电脑上。一行安装：
+
+```bash
+cd mcp-server && npm install && npm test
+```
+
+具体客户端配置和宿主使用规则见
+[`mcp-server/README.md`](mcp-server/README.md)。

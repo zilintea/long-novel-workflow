@@ -111,10 +111,28 @@ data/genres/              # fanqie_urban, fanqie_rebirth_revenge, royalroad_litr
 data/slop/                # zh.yaml, en.yaml (de-slop lists)
 checklists/               # chapter_audit.md, continuity_audit.md
 examples/sample-book/     # complete small original sample project (bible/outline/state/chapters 001-003)
+mcp-server/               # MCP server (stdio + streamable HTTP) — see mcp-server/README.md
 ```
 
 The skill repo and a book project are separate: the skill lives in one folder,
 each book is its own `bible/outline/state/chapters/` project. See `docs/CONTINUITY.md`.
+
+## MCP server (WorkBuddy / Doubao)
+
+`mcp-server/` is an MCP server for this skill (Node.js, no model calls):
+it exposes the book state machine as 14 tools — list/get books and chapters,
+draft contracts (with the blocking hook-handoff rule), save drafts, run the
+deterministic audit, atomic commit / rollback, and the foreshadowing ledger —
+over stdio (WorkBuddy, Claude, Cursor) and streamable HTTP
+(Doubao desktop, `http://127.0.0.1:8765/mcp`). Books stay on your own
+machine. One-line install:
+
+```bash
+cd mcp-server && npm install && npm test
+```
+
+See [`mcp-server/README.md`](mcp-server/README.md) for the exact client
+configs and the host usage rules.
 
 ## Acknowledgements
 
