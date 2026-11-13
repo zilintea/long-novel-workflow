@@ -38,6 +38,14 @@ everything is data-driven from the book files on disk.
 
 ## Install
 
+### 一键安装（Windows 小白版）
+
+下载 `install-windows.bat` 和 `install-windows.ps1` 放到同一个文件夹，双击
+`.bat` 就行：它会检查 Node/Python、下载代码、装依赖、建书库文件夹、自动写
+好 WorkBuddy 配置、在桌面放一个豆包启动器，并写一份安装说明。装完只需再做
+两步手动操作（WorkBuddy 里点“信任”，豆包里加连接器），说明里都写清楚了。
+重跑一次就是更新，书不会被删。
+
 ```bash
 git clone https://github.com/zilintea/long-novel-workflow.git
 cd long-novel-workflow/mcp-server
