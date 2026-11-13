@@ -1,0 +1,15 @@
+# Chinese AI-flavour list (de-slop). Phrases the checker rejects in prose.
+# Keep this list short and real: add a phrase only after seeing it in a bad draft.
+banned:
+  - "空气仿佛凝固了"
+  - "不是……而是……"
+  - "他深吸一口气，缓缓说道"
+  - "一股暖流涌上心头"
+  - "时间仿佛在这一刻静止"
+  - "她的眼中闪过一丝"
+  - "命运的齿轮开始转动"
+  - "他不知道的是"
+notes: >
+  "他不知道的是" is banned because it is usually a foreknowledge leak in
+  disguise: if the narrator knows it, the chapter contract must say who
+  knows it and when the reader learns it.

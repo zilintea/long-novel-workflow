@@ -1,0 +1,22 @@
+# Chinese language defaults (zh)
+code: zh
+name: Chinese
+chapter_chars_min: 2000
+chapter_chars_max: 3000
+probe_chars_min: 800
+words_per_chapter: null
+hook_first_words: 500
+paragraph: short, 1-3 sentences, dialogue-heavy
+token_budget_per_chapter: 12000
+platforms:
+  - Fanqie
+  - Qimao
+  - Qidian
+  - Jinjiang
+genre_packs:
+  - fanqie_rebirth_revenge
+  - fanqie_urban
+notes: >
+  Chapter length is counted in characters (excluding whitespace).
+  Free-reading platforms reward fast payoff and chapter-end hooks.
+  A chapter shorter than 2000 characters is a probe/excerpt, not a serial chapter.

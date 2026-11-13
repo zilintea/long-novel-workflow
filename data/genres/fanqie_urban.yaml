@@ -1,0 +1,17 @@
+# Fanqie urban genre pack
+id: fanqie_urban
+language: zh
+platform: Fanqie
+formula: urban + high-martial + brain-hole
+chapter_chars: 2000-3000
+primary_desires:
+  - identification-upgrade
+  - curiosity
+hook_types:
+  - reversal
+  - new-information
+  - arrival
+payoff_shape: a hidden skill used in public; a status reversal in one scene; a brain-hole rule used cleverly instead of by force
+risks:
+  - power scale must stay consistent; every new ability needs a cost written in the rules
+notes: The "brain-hole" rule is a world rule, not a plot excuse — it must be in bible/rules.md before it is used.

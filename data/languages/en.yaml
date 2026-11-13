@@ -1,0 +1,21 @@
+# English language defaults (en)
+code: en
+name: English
+chapter_words_min: 1500
+chapter_words_max: 2500
+probe_words_min: 600
+chars_per_chapter: null
+hook_first_words: 300
+paragraph: short, 1-3 sentences, dialogue-heavy
+token_budget_per_chapter: 12000
+platforms:
+  - Royal Road
+  - Wattpad
+  - Webnovel
+genre_packs:
+  - royalroad_litrpg
+notes: >
+  Chapter length is counted in words.
+  Royal Road rewards measurable progression and strong openings;
+  Wattpad rewards romance/YA hooks and social reading.
+  A chapter shorter than 1500 words is a probe/excerpt, not a serial chapter.

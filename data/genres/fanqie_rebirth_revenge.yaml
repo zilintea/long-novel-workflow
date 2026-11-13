@@ -1,0 +1,19 @@
+# Fanqie rebirth-revenge genre pack
+id: fanqie_rebirth_revenge
+language: zh
+platform: Fanqie
+formula: rebirth-revenge + identity-suspense + strong-relationship
+chapter_chars: 2000-3000
+primary_desires:
+  - revenge-compensation
+  - curiosity
+  - being-loved
+hook_types:
+  - reversal
+  - identity
+  - countdown
+payoff_shape: public humiliation repaid; identity revealed in front of the people who looked down on the hero
+risks:
+  - most AI-flooded genre on Fanqie; premise alone does not differentiate
+  - revenge without cost feels cheap; every revenge needs a price
+notes: Title and character names are decided after the market scan, never before it.

@@ -1,0 +1,15 @@
+# English AI-flavour list (de-slop). Phrases the checker rejects in prose.
+# Keep this list short and real: add a phrase only after seeing it in a bad draft.
+banned:
+  - "It wasn't just"
+  - "The air shifted"
+  - "A chill ran down her spine"
+  - "Little did he know"
+  - "Time seemed to stand still"
+  - "Her eyes widened in shock"
+  - "The weight of the moment"
+  - "In that moment, everything changed"
+notes: >
+  "Little did he know" is banned because it is usually a foreknowledge leak
+  in disguise: if the narrator knows it, the chapter contract must say who
+  knows it and when the reader learns it.

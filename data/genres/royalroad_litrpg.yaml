@@ -1,0 +1,19 @@
+# Royal Road LitRPG / progression fantasy genre pack
+id: royalroad_litrpg
+language: en
+platform: Royal Road
+formula: progression fantasy + LitRPG system + measurable growth
+chapter_words: 1500-2500
+primary_desires:
+  - identification-upgrade
+  - curiosity
+hook_types:
+  - countdown
+  - new-information
+  - threat
+payoff_shape: a level-up or skill that changes what the hero can do in the next fight; a system rule used cleverly
+risks:
+  - a level-up that changes nothing is a broken promise
+  - system notifications are prose, not decoration
+  - weak openings are rated down fast; the golden-3 gate matters most here
+notes: No exclusivity contract is required on Royal Road; monetisation is via Patreon. Read any contract before signing elsewhere.
