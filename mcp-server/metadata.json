@@ -1,0 +1,6 @@
+{
+  "name": "Long Novel Studio",
+  "description": "基于 zilintea/long-novel-workflow 开源技能的 AI 长篇小说创作工作台：扫榜立项、故事圣经、黄金三章、章节合同、阻断审计、伏笔台账与原子提交。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

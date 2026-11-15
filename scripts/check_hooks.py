@@ -1,25 +1,42 @@
 #!/usr/bin/env python3
-"""Check hook + desire payoff per chapter (BLOCKING audit).
+"""Check hook + desire payoff per chapter (BLOCKING audit, v2.0.0).
 Stdlib only. Usage: python3 scripts/check_hooks.py <book_dir>
 
 Blocking checks (exit 1 on any failure):
   - every chapter contract has a non-empty `hook` (>=10 characters) and a
-    `desire` from the 5 locked desires, plus a non-empty `desire_payoff`
-    (what the chapter actually delivers for that desire)
+    `desire` from the 8 core desires (or `auto` with warning), plus a non-empty
+    `desire_payoff` (what the chapter actually delivers for that desire)
   - every chapter has a non-empty `transition` (how it hands off to the next)
-  - payoff cadence: chapter 3, 6, 9, ... must declare payoff_size small|big;
-    chapter 10, 20, 30, ... must declare payoff_size big
+  - payoff cadence: chapter 3, 6, 9, ... must declare payoff_size small|big (or `auto`);
+    chapter 10, 20, 30, ... must declare payoff_size big (or `auto`)
   - the chapter's last paragraph must not be empty (a chapter ends on its hook,
     not on a dangling setup line)
-Warnings: hook shorter than 20 characters (weak hook).
+Warnings: hook shorter than 20 characters (weak hook), or unresolved `auto`.
 """
 import os
 import re
 import sys
 
-DESIRES = {"curiosity", "identification-upgrade", "revenge-compensation",
-           "being-loved", "escape-comfort"}
-DESIRE_ZH = {"好奇", "代入升级", "复仇补偿", "被爱拉扯", "逃逸安慰"}
+DESIRES = {
+    "curiosity",
+    "identification-upgrade",
+    "revenge-compensation",
+    "being-loved",
+    "escape-comfort",
+    "survival-breakout",
+    "power-scheme",
+    "bond-resonance",
+}
+DESIRE_ZH = {
+    "好奇",
+    "代入升级",
+    "复仇补偿",
+    "被爱拉扯",
+    "逃逸安慰",
+    "求生破局",
+    "博弈掌权",
+    "羁绊共鸣",
+}
 
 
 def chapter_fields(text):
@@ -48,7 +65,9 @@ def check_book(book):
         fields, prose = chapter_fields(text)
         label = fname
         desire = fields.get("desire", "")
-        if desire not in DESIRES and desire not in DESIRE_ZH:
+        if desire == "auto":
+            warnings.append(f"{label}: desire is `auto` (recommend resolving to concrete desire)")
+        elif desire not in DESIRES and desire not in DESIRE_ZH:
             failures.append(f"{label}: unknown desire `{desire}`")
         if len(fields.get("hook", "")) < 10:
             failures.append(f"{label}: missing or too-short `hook` (need >=10 chars) — "
@@ -62,12 +81,15 @@ def check_book(book):
             failures.append(f"{label}: missing `transition` — how does this chapter hand off "
                             f"to the next?")
         size = fields.get("payoff_size", "")
-        if num % 3 == 0 and size not in ("small", "big"):
-            failures.append(f"{label}: chapter {num} is a payoff chapter (multiple of 3) — "
-                            f"declare payoff_size small|big")
-        if num % 10 == 0 and size != "big":
-            failures.append(f"{label}: chapter {num} is a big-payoff chapter (multiple of 10) — "
-                            f"payoff_size must be big")
+        if size == "auto":
+            warnings.append(f"{label}: payoff_size is `auto` (AI-managed execution)")
+        else:
+            if num % 3 == 0 and size not in ("small", "big"):
+                failures.append(f"{label}: chapter {num} is a payoff chapter (multiple of 3) — "
+                                f"declare payoff_size small|big")
+            if num % 10 == 0 and size != "big":
+                failures.append(f"{label}: chapter {num} is a big-payoff chapter (multiple of 10) — "
+                                f"payoff_size must be big")
         paras = [p.strip() for p in prose.strip().split("\n\n") if p.strip()]
         if not paras:
             failures.append(f"{label}: no prose paragraphs found")

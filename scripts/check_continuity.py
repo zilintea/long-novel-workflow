@@ -1,23 +1,36 @@
 #!/usr/bin/env python3
-"""Check a book project's continuity state files.
+"""Check a book project's continuity state files (v2.0.0).
 Stdlib only. Usage: python3 scripts/check_continuity.py <book_dir>
 
 Blocking checks (exit 1 on any failure):
   - state/foreshadowing.md exists; every thread has planted/payoff_due/status
   - every foreshadowing id planted/paid in a chapter contract exists in the ledger
-  - a thread paid in a chapter is marked paid (or in-progress) in the ledger
-  - no open thread is past its payoff_due chapter (stale = FAIL; due within
-    the next 3 chapters = warning). Open threads unpaid after 30 chapters are
-    always FAIL (the 30-chapter flag rule).
+  - a thread paid in a chapter is marked paid (or progressing) in the ledger
+  - no `open` or un-rescheduled `deferred` thread is past its payoff_due chapter
+    (stale = FAIL; due within the next 3 chapters = warning). Open threads unpaid
+    after 30 chapters are always FAIL (the 30-chapter flag rule).
   - state/knows.md exists and lists every character named in bible/characters.md
   - every character named in a chapter contract appears in bible/characters.md
+    and is NOT a nameless placeholder (e.g. 黑衣人, 神秘人, 路人, 店小二, stranger)
   - state/summary.md, state/timeline.md, state/progress.md exist; progress.md
     lists exactly the committed chapters present in chapters/
-Warnings: ledger thread with no payoff_due, knows entry with no "learned in" chapter.
+Warnings:
+  - ledger thread with no payoff_due
+  - chapter >= 2 with <= 1 named character (cast-thin / solo monologue risk)
 """
 import os
 import re
 import sys
+
+PLACEHOLDER_NAMES = {
+    "黑衣人", "神秘人", "陌生人", "路人", "过路人", "行人", "群众", "围观者",
+    "侍卫", "护卫", "士兵", "家丁", "管家", "掌柜", "店小二", "小二", "老板",
+    "老者", "老头", "老妇", "少女", "少年", "男子", "女子", "男人", "女人",
+    "杀手", "刺客", "打手", "保镖", "医生", "大夫", "护士", "秘书", "助理",
+    "司机", "主角", "反派", "男主", "女主", "配角", "龙套", "某人", "无名",
+    "unknown", "stranger", "guard", "assassin", "passerby", "protagonist",
+    "waiter", "doctor",
+}
 
 
 def read(path):
@@ -30,10 +43,12 @@ def parse_ledger(text):
         m = re.match(r"-\s*(F\d+)\s*\|\s*planted:\s*(\d+)\s*\|\s*payoff_due:\s*(\d+|—|-)?"
                      r"\s*\|\s*status:\s*(\w+)", line)
         if m:
+            target_m = re.search(r"target_chapter:\s*(\d+)", line)
             threads[m.group(1)] = {
                 "planted": int(m.group(2)),
                 "payoff_due": int(m.group(3)) if m.group(3) and m.group(3).isdigit() else None,
                 "status": m.group(4),
+                "target_chapter": int(target_m.group(1)) if target_m else None,
             }
     return threads
 
@@ -58,7 +73,7 @@ def check_book(book):
     ledger = parse_ledger(read(ledger_path))
     if not ledger:
         failures.append("state/foreshadowing.md: no parseable threads "
-                        "(want `- F01 | planted: N | payoff_due: N | status: open|paid`)")
+                        "(want `- F01 | planted: N | payoff_due: N | status: open|progressing|paid|deferred`)")
     knows = read(os.path.join(state, "knows.md"))
     if not knows.strip():
         failures.append("missing/empty state/knows.md")
@@ -73,7 +88,6 @@ def check_book(book):
     files = sorted(f for f in os.listdir(ch_dir) if re.match(r"^\d{3}\.md$", f)) \
         if os.path.isdir(ch_dir) else []
     max_ch = 0
-    committed = set()
     for fname in files:
         fields = chapter_fields(read(os.path.join(ch_dir, fname)))
         num = int(fname[:3])
@@ -85,21 +99,29 @@ def check_book(book):
                 elif key == "foreshadowing_paid" and ledger[tid]["status"] not in ("paid", "progressing"):
                     failures.append(f"{fname}: pays off {tid} but ledger status is "
                                     f"`{ledger[tid]['status']}` (must be paid/progressing)")
-        for name in [c.strip() for c in fields.get("characters", "").split(",") if c.strip()]:
-            if name and name not in bible_chars:
+        char_names = [c.strip() for c in fields.get("characters", "").split(",") if c.strip()]
+        if num >= 2 and len(char_names) <= 1:
+            warnings.append(f"{fname}: only {len(char_names)} character(s) listed — "
+                            f"avoid solo protagonist monologue; bring in named supporting cast")
+        for name in char_names:
+            if name.lower() in PLACEHOLDER_NAMES or re.match(r"^(某|第[一二三四五六七八九十\d]+号|未知)", name):
+                failures.append(f"{fname}: placeholder character name `{name}` is forbidden — "
+                                f"forge a named character and register in bible/characters.md")
+            elif name and name not in bible_chars:
                 failures.append(f"{fname}: character `{name}` not in bible/characters.md")
     for tid, t in ledger.items():
         due = t["payoff_due"]
         if due is None:
             warnings.append(f"{tid}: no payoff_due set (every thread needs a payoff date)")
             continue
-        if t["status"] == "open":
-            if max_ch >= due:
-                failures.append(f"{tid}: open past payoff_due chapter {due} "
+        if t["status"] in ("open", "progressing", "deferred"):
+            effective_due = max(due, t["target_chapter"] or 0)
+            if max_ch >= effective_due:
+                failures.append(f"{tid}: {t['status']} past payoff_due chapter {effective_due} "
                                 f"(current chapter {max_ch}) — stale thread")
-            elif due - max_ch <= 3:
+            elif t["status"] == "open" and due - max_ch <= 3:
                 warnings.append(f"{tid}: payoff due in chapter {due}, current {max_ch}")
-            if max_ch - t["planted"] >= 30:
+            if t["status"] == "open" and max_ch - t["planted"] >= 30:
                 failures.append(f"{tid}: open for >=30 chapters since planted "
                                 f"(chapter {t['planted']}) — 30-chapter flag")
     progress = read(os.path.join(state, "progress.md"))

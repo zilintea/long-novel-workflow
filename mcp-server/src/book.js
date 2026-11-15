@@ -168,7 +168,7 @@ export async function listChapters(root, id) {
 // ---------------------------------------------------------------------- ledger
 
 const LEDGER_RE =
-  /^-\s*(F\d+)\s*\|\s*planted:\s*(\d+)\s*\|\s*payoff_due:\s*(\d+|—|-)?\s*\|\s*status:\s*(\w+)\s*\|\s*thread:\s*(.*)$/;
+  /^-\s*(F\d+)\s*\|\s*planted:\s*(\d+)\s*\|\s*payoff_due:\s*(\d+|—|-)?\s*\|\s*status:\s*(\w+)\s*(?:\|\s*target_chapter:\s*(\d+)\s*)?\|\s*thread:\s*(.*)$/;
 
 export function parseLedger(text) {
   const threads = [];
@@ -180,7 +180,8 @@ export function parseLedger(text) {
         planted: Number(m[2]),
         payoffDue: m[3] && /^\d+$/.test(m[3]) ? Number(m[3]) : null,
         status: m[4],
-        thread: m[5].trim(),
+        targetChapter: m[5] ? Number(m[5]) : null,
+        thread: m[6].trim(),
       });
     }
   }
@@ -188,7 +189,8 @@ export function parseLedger(text) {
 }
 
 export function ledgerLine(t) {
-  return `- ${t.id} | planted: ${t.planted} | payoff_due: ${t.payoffDue ?? '—'} | status: ${t.status} | thread: ${t.thread}`;
+  const targetPart = t.targetChapter ? ` | target_chapter: ${t.targetChapter}` : '';
+  return `- ${t.id} | planted: ${t.planted} | payoff_due: ${t.payoffDue ?? '—'} | status: ${t.status}${targetPart} | thread: ${t.thread}`;
 }
 
 // Apply ledger edits to the file text, preserving header/comments and line order.
@@ -209,7 +211,8 @@ export function applyLedgerEdits(text, edits) {
       planted: Number(m[2]),
       payoffDue: m[3] && /^\d+$/.test(m[3]) ? Number(m[3]) : null,
       status: m[4],
-      thread: m[5].trim(),
+      targetChapter: m[5] ? Number(m[5]) : null,
+      thread: m[6].trim(),
     };
     if (edits.removePlantedByChapter !== undefined && t.planted === edits.removePlantedByChapter) {
       continue; // thread was planted by the rolled-back chapter: drop the line
@@ -217,7 +220,11 @@ export function applyLedgerEdits(text, edits) {
     if ((edits.markPaid || []).includes(t.id)) t.status = 'paid';
     if ((edits.reopen || []).includes(t.id)) t.status = 'open';
     const ext = (edits.extend || []).find((e) => e.id === t.id);
-    if (ext) t.payoffDue = ext.payoffDue;
+    if (ext) {
+      t.payoffDue = ext.payoffDue;
+      if (t.status === 'open') t.status = 'deferred';
+      t.targetChapter = ext.payoffDue;
+    }
     out.push(ledgerLine(t));
   }
   for (const p of edits.plant || []) {
@@ -276,9 +283,36 @@ export async function bibleCharacters(bookDirPath) {
   return [...text.matchAll(/^##\s+(.+)$/gm)].map((m) => m[1].trim());
 }
 
+export function appendBibleCharacters(text, newChars, chapter) {
+  let out = text;
+  const existing = new Set([...out.matchAll(/^##\s+(.+)$/gm)].map((m) => m[1].trim()));
+  for (const c of newChars || []) {
+    const name = String(c.name || '').trim();
+    if (!name || existing.has(name)) continue;
+    existing.add(name);
+    if (!out.endsWith('\n')) out += '\n';
+    out += `\n## ${name}\n<!-- added-in-chapter: ${chapter} -->\n`;
+    if (c.role) out += `- Role: ${c.role}\n`;
+    if (c.dna) out += `- DNA: ${c.dna}\n`;
+    if (c.want) out += `- Want: ${c.want}\n`;
+    if (c.flaw) out += `- Flaw: ${c.flaw}\n`;
+  }
+  return out;
+}
+
+export function removeBibleCharactersForChapter(text, chapter) {
+  const marker = `<!-- added-in-chapter: ${chapter} -->`;
+  if (!text.includes(marker)) return text;
+  const parts = text.split(/\n(?=##\s+)/);
+  return parts
+    .filter((section) => !section.includes(marker))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
 // Append `- entry` lines under each character's `## <name>` section.
 // Throws if a character has no section in bible/characters.md.
-export function appendKnows(text, entries, characters) {
+export function appendKnows(text, entries, characters, chapter = null) {
   let out = text;
   for (const { character, entry } of entries) {
     if (!characters.includes(character)) {
@@ -290,7 +324,8 @@ export function appendKnows(text, entries, characters) {
     const idx = out.indexOf(heading);
     if (idx === -1) {
       if (!out.endsWith('\n')) out += '\n';
-      out += `\n${heading}\n\n- ${entry}\n`;
+      const marker = chapter ? `<!-- added-in-chapter: ${chapter} -->\n` : '';
+      out += `\n${heading}\n${marker}\n- ${entry}\n`;
       continue;
     }
     const after = out.indexOf('\n## ', idx + heading.length);
@@ -302,13 +337,18 @@ export function appendKnows(text, entries, characters) {
   return out;
 }
 
-// Remove knows lines learned in a given chapter: lines containing "(chapter N".
+// Remove knows lines learned in a given chapter: lines containing "(chapter N"
+// as well as sections created purely for characters introduced in that chapter.
 export function removeKnowsForChapter(text, chapter) {
+  const marker = `<!-- added-in-chapter: ${chapter} -->`;
+  const parts = text.split(/\n(?=##\s+)/).filter((section) => !section.includes(marker));
   const re = new RegExp(`\\(chapter ${chapter}[\\s—]`);
-  return text
+  return parts
+    .join('\n')
     .split('\n')
     .filter((l) => !re.test(l))
-    .join('\n');
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n');
 }
 
 // ------------------------------------------------------------------ atomic write

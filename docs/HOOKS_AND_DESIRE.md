@@ -1,10 +1,10 @@
-# HOOKS AND DESIRE — the 5 desires
+# HOOKS AND DESIRE — the 8 desires (v2.0.0)
 
 Readers do not finish a chapter because the prose is beautiful. They finish
 it because a desire was promised and then — partly — paid off, and a new
 promise was made at the end. Every chapter must do both.
 
-## The 5 desires (locked v1.0.0)
+## The 8 desires (v2.0.0)
 
 | # | Desire | What the reader wants | zh |
 |---|---|---|---|
@@ -13,23 +13,30 @@ promise was made at the end. Every chapter must do both.
 | 3 | revenge-compensation | to see the wrong righted, the humiliation repaid | 复仇补偿 |
 | 4 | being-loved | to be chosen, wanted, protected — tension included | 被爱拉扯 |
 | 5 | escape-comfort | to rest somewhere safe and warm for a while | 逃逸安慰 |
+| 6 | survival-breakout | to break out of a desperate trap, pursuit, or lethal rule | 求生破局 |
+| 7 | power-scheme | to outmanoeuvre rivals, flip leverage, and seize authority | 博弈掌权 |
+| 8 | bond-resonance | to forge loyalty, shared conviction, or high-stakes rivalry | 羁绊共鸣 |
 
-A chapter may serve more than one, but its contract names **one primary**
-desire and says in one sentence what the chapter actually delivers for it
-(`desire_payoff`). A promise with no delivery in the chapter is a broken
-promise; the reader notices by chapter 3.
+A chapter may serve more than one, and its contract either names **one primary**
+desire or sets `desire: auto` (AI selects the best-fit desire from the 8 based on
+the chapter's plot beat and arc rhythm) while stating in one sentence what the
+chapter actually delivers (`desire_payoff`). A promise with no delivery in the
+chapter is a broken promise; the reader notices by chapter 3.
 
-## Payoff cadence (locked)
+## Payoff cadence (v2.0.0)
 
+- **Default (`payoff_size: auto`):** AI dynamically chooses and executes the
+  payoff intensity according to pacing:
 - **Every chapter:** pays off ≥1 desire, at least partly.
 - **Every 3 chapters:** a small payoff (a secret revealed, a rival humbled,
-  a skill levelled up, a kiss almost happened). Contract field
-  `payoff_size: small`.
+  a skill levelled up, a tactical escape). Explicit value: `payoff_size: small`.
 - **Every 10 chapters:** a big payoff (an identity revealed, a revenge
-  completed, a relationship turning point). Contract field `payoff_size: big`.
+  completed, a major power shift, a relationship turning point). Explicit value:
+  `payoff_size: big`.
 - **Every chapter ends on a hook.** The hook is a blocking audit:
-  `scripts/check_hooks.py` fails a chapter with no hook, no desire payoff,
-  or no `transition`. A chapter that ends flat has no reason to be read next.
+  `scripts/check_hooks.py` fails a chapter with no hook (`>= 10 chars`), no
+  `desire_payoff`, or no `transition`. A chapter that ends flat has no reason to
+  be read next.
 
 ## Hook types (pick at least one per chapter)
 
@@ -48,8 +55,9 @@ before the prose (see `templates/chapter_contract.md`).
 
 ## Desire ≠ genre
 
-The 5 desires are language- and genre-independent. A LitRPG chapter pays
-identification-upgrade with a level-up; a romance chapter pays being-loved
-with a near-confession; a revenge chapter pays revenge-compensation with a
-public humiliation repaid. The genre pack (`data/genres/`) says *how* a
-desire is paid on its platform; the desire itself never changes.
+The 8 desires are language- and genre-independent. A LitRPG chapter pays
+identification-upgrade with a level-up; a thriller pays survival-breakout with a
+narrow escape; a court-intrigue chapter pays power-scheme with a faction flip;
+a brotherhood or romance arc pays bond-resonance or being-loved. The genre pack
+(`data/genres/`) says *how* a desire is paid on its platform; the desires
+themselves remain universal.

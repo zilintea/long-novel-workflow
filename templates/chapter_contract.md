@@ -6,12 +6,13 @@ chapter file `chapters/NNN.md` with the same frontmatter fields.
 
 ```yaml
 chapter: NNN
-title: <chapter title>
+title: 第NNN章 <chapter title>
 language: zh            # zh | en
-desire: curiosity       # one of: curiosity / identification-upgrade /
-                        #   revenge-compensation / being-loved / escape-comfort
+desire: auto            # auto (AI picks best) | curiosity | identification-upgrade |
+                        #   revenge-compensation | being-loved | escape-comfort |
+                        #   survival-breakout | power-scheme | bond-resonance
 desire_payoff: <what this chapter actually delivers for that desire, in one sentence>
-payoff_size: small      # small | big — chapters 3,6,9... must declare; 10,20,30... must be big
+payoff_size: auto       # auto | small | big — chapters 3,6,9... resolve to small|big; 10,20,30... must be big
 hook: <the end hook, in one sentence — the reason to read the next chapter>
 transition: <how this chapter hands off to the next: what state, place, time and
              knowledge the next chapter starts from. Continuous = next chapter
@@ -19,7 +20,8 @@ transition: <how this chapter hands off to the next: what state, place, time and
              already in motion, and at least one of subject/place/scale must change>
 must_happen: <beats that must happen, in order>
 must_not: <forbidden moves for this chapter>
-characters: <names present, comma-separated — must all be in bible/characters.md>
+characters: <2-4 named characters present — avoid solo monologue or nameless placeholders;
+             new named supporting roles are auto-registered in bible/characters.md on commit>
 foreshadowing_planted: <F-ids planted here, or ->
 foreshadowing_paid: <F-ids paid off here, or ->
 ```
@@ -28,7 +30,7 @@ foreshadowing_paid: <F-ids paid off here, or ->
 
 - Load only: this contract + hard facts + the slices it names (last 1–3 full
   chapters, rolling summaries, related chapters by foreshadowing / character /
-  status-change / relationship). Never dump the whole book.
+  status-change / relationship) + full cast roster for continuity recall.
 - If the previous chapter ended on a hook, this contract must state how this
   chapter's opening resolves it. A `transition: cut` does not excuse dropping
   the previous hook — see SKILL.md hard rule 11.
@@ -37,5 +39,5 @@ foreshadowing_paid: <F-ids paid off here, or ->
 - A character may guess, suspect or misread — never *know* what they were
   never told (see `state/knows.md`). To give them information, show how they
   got it in the prose.
-- Chapter length: zh 2000–3000 characters; en 1500–2500 words.
+- Chapter length: zh 2000–4000 characters; en 1500–2500 words.
   Probe/excerpt chapters may be shorter — say so in the contract.

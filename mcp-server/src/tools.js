@@ -9,13 +9,25 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as book from './book.js';
 import { auditDraft, runChecks } from './audit.js';
 
-const DESIRES = ['curiosity', 'identification-upgrade', 'revenge-compensation', 'being-loved', 'escape-comfort'];
+const DESIRES = [
+  'curiosity',
+  'identification-upgrade',
+  'revenge-compensation',
+  'being-loved',
+  'escape-comfort',
+  'survival-breakout',
+  'power-scheme',
+  'bond-resonance',
+];
 const DESIRE_ZH = {
   好奇: 'curiosity',
   代入升级: 'identification-upgrade',
   复仇补偿: 'revenge-compensation',
   被爱拉扯: 'being-loved',
   逃逸安慰: 'escape-comfort',
+  求生破局: 'survival-breakout',
+  博弈掌权: 'power-scheme',
+  羁绊共鸣: 'bond-resonance',
 };
 const REQUIRED_CONTRACT = ['chapter', 'title', 'language', 'desire', 'hook', 'transition', 'must_happen', 'characters'];
 
@@ -96,15 +108,17 @@ function validateContractFields(f, chapter) {
   if (f.language && !['zh', 'en'].includes(f.language)) {
     errors.push(`unknown language \`${f.language}\` (want zh or en)`);
   }
-  if (f.desire) {
+  if (f.desire && f.desire !== 'auto') {
     const d = DESIRE_ZH[f.desire] || f.desire;
-    if (!DESIRES.includes(d)) errors.push(`unknown desire \`${f.desire}\` (want one of ${DESIRES.join(', ')})`);
+    if (!DESIRES.includes(d)) errors.push(`unknown desire \`${f.desire}\` (want auto or one of ${DESIRES.join(', ')})`);
   }
-  if (chapter % 3 === 0 && !['small', 'big'].includes(f.payoff_size)) {
-    errors.push(`chapter ${chapter} is a payoff chapter (multiple of 3) — declare payoff_size small|big`);
-  }
-  if (chapter % 10 === 0 && f.payoff_size !== 'big') {
-    errors.push(`chapter ${chapter} is a big-payoff chapter (multiple of 10) — payoff_size must be big`);
+  if (f.payoff_size && f.payoff_size !== 'auto') {
+    if (chapter % 3 === 0 && !['small', 'big'].includes(f.payoff_size)) {
+      errors.push(`chapter ${chapter} is a payoff chapter (multiple of 3) — declare payoff_size auto|small|big`);
+    }
+    if (chapter % 10 === 0 && f.payoff_size !== 'big') {
+      errors.push(`chapter ${chapter} is a big-payoff chapter (multiple of 10) — payoff_size must be auto or big`);
+    }
   }
   return errors;
 }
@@ -123,7 +137,7 @@ function proseWarnings(prose, language, slopPhrases) {
   const warnings = [];
   if (language === 'zh') {
     const size = prose.replace(/\s+/g, '').length;
-    if (size < 800 || size > 3500) warnings.push(`prose is ${size} chars (serial range is 800-3500) — the audit will fail`);
+    if (size < 800 || size > 4000) warnings.push(`prose is ${size} chars (serial range is 800-4000) — the audit will fail`);
     else if (size < 2000) warnings.push(`prose is ${size} chars, below the serial target of 2000 (ok for a probe — say so in the contract)`);
   } else {
     const size = (prose.match(/[A-Za-z']+/g) || []).length;
@@ -186,8 +200,31 @@ async function computeCommitOps(bookDirPath, chapter, contractFields, inputs) {
     }
     plant.push({ id, planted: chapter, payoffDue: Number(detail.payoffDue), thread: String(detail.thread) });
   }
-  const knowsEntries = inputs.knows || [];
-  const characters = await book.bibleCharacters(bookDirPath);
+  const newCharacters = Array.isArray(inputs.newCharacters) ? inputs.newCharacters : [];
+  const bibleCharPath = path.join(bookDirPath, 'bible', 'characters.md');
+  const bibleCharText = (await book.readFileIfExists(bibleCharPath)) || '# Characters\n';
+  const existingChars = await book.bibleCharacters(bookDirPath);
+  const addedCharNames = [];
+  if (newCharacters.length) {
+    const updatedCharsText = book.appendBibleCharacters(bibleCharText, newCharacters, chapter);
+    if (updatedCharsText !== bibleCharText) {
+      ops.push({ path: bibleCharPath, content: updatedCharsText });
+    }
+    for (const c of newCharacters) {
+      const name = String(c.name || '').trim();
+      if (name && !existingChars.includes(name)) addedCharNames.push(name);
+    }
+  }
+  const characters = [...new Set([...existingChars, ...addedCharNames])];
+  const knowsEntries = [...(inputs.knows || [])];
+  for (const c of newCharacters) {
+    const name = String(c.name || '').trim();
+    if (name && c.initialKnows && !knowsEntries.some((k) => k.character === name)) {
+      knowsEntries.push({ character: name, entry: `${c.initialKnows} (chapter ${chapter} — introduced)` });
+    } else if (name && addedCharNames.includes(name) && !knowsEntries.some((k) => k.character === name)) {
+      knowsEntries.push({ character: name, entry: `Introduced in chapter ${chapter}` });
+    }
+  }
   for (const k of knowsEntries) {
     if (!k.character || !k.entry) throw new Error('each knows entry needs {character, entry}');
     if (!characters.includes(k.character)) {
@@ -217,38 +254,40 @@ async function computeCommitOps(bookDirPath, chapter, contractFields, inputs) {
   if (knowsEntries.length) {
     ops.push({
       path: path.join(stateDir, 'knows.md'),
-      content: book.appendKnows(knowsText, knowsEntries, characters),
+      content: book.appendKnows(knowsText, knowsEntries, characters, chapter),
     });
   }
-  return { ops, paidIds, planted: plant.map((p) => p.id) };
+  return { ops, paidIds, planted: plant.map((p) => p.id), addedCharNames };
 }
 
-function describeChanges(chapter, { paidIds, planted }) {
+function describeChanges(chapter, { paidIds, planted, addedCharNames }) {
   const changes = [`chapter ${chapter} committed (draft moved drafts/ → chapters/)`, `progress.md: committed ${chapter}, next chapter ${chapter + 1}`];
   if (paidIds.length) changes.push(`foreshadowing.md: ${paidIds.join(', ')} → paid`);
   if (planted.length) changes.push(`foreshadowing.md: planted ${planted.join(', ')}`);
+  if (addedCharNames && addedCharNames.length) changes.push(`bible/characters.md: registered ${addedCharNames.join(', ')}`);
   return changes;
 }
 
 // ---------------------------------------------------------------------- tools
 
 const HARD_RULES_SHORT = [
-  '1. Bible/outline first — no prose before Gate 1 approval.',
-  '2. Golden 3 first — chapters 1-3 read and diagnosed before the serial commits.',
+  '1. Bible/outline first — no prose before Gate 1 approval (or full-auto Step 1).',
+  '2. Golden 3 first — chapters 1-3 read and diagnosed before bulk serialising.',
   '3. Chapter contract before prose — no contract, no prose.',
-  '4. Hook + desire payoff is a blocking audit.',
+  '4. Hook + desire payoff is a blocking audit (8 desires or auto).',
   '5. Only redo the wrong segment; a revision rolls its committed state back first.',
   '6. Hard constraints first — a scene may not break a rule to save itself.',
   '7. Knows lists — a character never knows what they were never told.',
-  '8. Foreshadowing ledger — every thread has a planted chapter, a payoff chapter and a status.',
+  '8. Foreshadowing ledger — every thread has planted, payoff_due, and status (open|progressing|paid|deferred).',
   '9. File-as-truth — bible/outline/state/chapters on disk are the only truth.',
   '10. Rolling horizon — only the next arc is planned in detail.',
   '11. Hook handoff (blocking) — the next chapter contract must state how its opening resolves the previous chapter end hook.',
+  '12. Dynamic cast — avoid solo-protagonist monologues or nameless placeholders; register new characters atomically.',
 ];
 
 export function createNovelServer(config) {
   const { booksRoot, scansDir, python, skillRoot } = config;
-  const server = new McpServer({ name: 'long-novel-mcp', version: '1.0.0' });
+  const server = new McpServer({ name: 'long-novel-mcp', version: '2.0.0' });
 
   server.registerTool(
     'listBooks',
@@ -347,7 +386,7 @@ export function createNovelServer(config) {
     language: z.enum(['zh', 'en']).optional(),
     desire: z.string().optional(),
     desirePayoff: z.string().optional(),
-    payoffSize: z.enum(['small', 'big']).optional(),
+    payoffSize: z.enum(['auto', 'small', 'big']).optional(),
     hook: z.string().optional(),
     hookHandoff: z.string().optional(),
     transition: z.string().optional(),
@@ -438,6 +477,18 @@ export function createNovelServer(config) {
     foreshadowingPlanted: z
       .array(z.object({ id: z.string(), payoffDue: z.number().int(), thread: z.string() }))
       .optional(),
+    newCharacters: z
+      .array(
+        z.object({
+          name: z.string(),
+          role: z.string().optional(),
+          dna: z.string().optional(),
+          want: z.string().optional(),
+          flaw: z.string().optional(),
+          initialKnows: z.string().optional(),
+        }),
+      )
+      .optional(),
   };
 
   server.registerTool(
@@ -497,6 +548,7 @@ export function createNovelServer(config) {
         knows: commitInputsShape.knows,
         foreshadowingPaid: commitInputsShape.foreshadowingPaid,
         foreshadowingPlanted: commitInputsShape.foreshadowingPlanted,
+        newCharacters: commitInputsShape.newCharacters,
       },
     },
     wrap(async (input) => {
@@ -516,7 +568,7 @@ export function createNovelServer(config) {
         const failures = audit.results.flatMap((r) => r.failures.map((f) => `${r.script}: ${f}`));
         throw new Error(`commit REFUSED — deterministic audit failed:\n- ${failures.join('\n- ')}`);
       }
-      const { ops, paidIds, planted } = await computeCommitOps(dir, n, loaded.fields, input);
+      const { ops, paidIds, planted, addedCharNames } = await computeCommitOps(dir, n, loaded.fields, input);
       ops.push({ path: path.join(dir, 'chapters', book.chapterFile(n)), content: draftText });
       await book.writeFilesAtomic(ops);
       await fs.unlink(draftPath).catch(() => {});
@@ -524,7 +576,7 @@ export function createNovelServer(config) {
         book: input.book,
         chapter: n,
         committed: true,
-        changes: describeChanges(n, { paidIds, planted }),
+        changes: describeChanges(n, { paidIds, planted, addedCharNames }),
         auditNotes: audit.notes,
       });
     }),
@@ -593,7 +645,16 @@ export function createNovelServer(config) {
         const updated = book.removeKnowsForChapter(knowsText, n);
         if (updated !== knowsText) {
           ops.push({ path: path.join(stateDir, 'knows.md'), content: updated });
-          removed.push(`knows.md: removed lines learned in chapter ${n}`);
+          removed.push(`knows.md: removed lines/sections added in chapter ${n}`);
+        }
+      }
+      const bibleCharPath = path.join(dir, 'bible', 'characters.md');
+      const bibleCharText = await book.readFileIfExists(bibleCharPath);
+      if (bibleCharText !== null) {
+        const updated = book.removeBibleCharactersForChapter(bibleCharText, n);
+        if (updated !== bibleCharText) {
+          ops.push({ path: bibleCharPath, content: updated });
+          removed.push(`bible/characters.md: removed characters introduced in chapter ${n}`);
         }
       }
       ops.push({ path: path.join(dir, 'drafts', book.chapterFile(n)), content: chapterText });
@@ -754,9 +815,9 @@ export function createNovelServer(config) {
       const auditCriteria = await book.readFileIfExists(path.join(skillRoot, 'checklists', 'chapter_audit.md'));
       return ok({
         name: 'long-novel-workflow',
-        version: '1.0.0',
+        version: '2.0.0',
         bookLayout: 'bible/ (canon, characters, world, rules, voice), outline/ (overview, chapters/NNN.md contracts), state/ (summary, character_state, foreshadowing, knows, progress, timeline), chapters/ (NNN.md, committed only), drafts/ (NNN.md, uncommitted drafts)',
-        gates: ['Gate 1: bible + outline approved before any prose', 'Gate 2: golden 3 chapters read before the serial commits', 'Gate 3 per chapter: contract → draft → audit → bounded revise → CHAPTER_COMMIT (author approval)'],
+        gates: ['Gate 1: bible + outline ready before any prose', 'Gate 2: golden 3 chapters diagnosed before bulk serialising', 'Gate 3 per chapter: contract → draft → audit → bounded revise → CHAPTER_COMMIT (author-gated or full-auto)'],
         hardRules: HARD_RULES_SHORT,
         steps: ['Step 0 market scan', 'Step 1 bible + outline', 'Step 2 golden 3 chapters', 'Step 3 chapter loop (contract → draft → sub-review → bounded revise → commit)', 'Step 4 arc review every 30 chapters', 'Step 5 import an existing manuscript'],
         auditCriteria8Dimensions: auditCriteria || '(checklists/chapter_audit.md not found)',

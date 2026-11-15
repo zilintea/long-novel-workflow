@@ -1,6 +1,6 @@
 name: long-novel-workflow
 title: Long Novel Workflow
-description: Long serialised fiction workflow skill. One prompt starts a novel of any length, Chinese or English: bible and outline first, golden 3 chapters first, then one chapter at a time with a chapter contract, a blocking hook/desire audit, a foreshadowing ledger and per-character knows lists. File-as-truth, only redo the wrong segment, state rollback on revision. Use when the user says "write a novel", "continue chapter N", "import my manuscript" or "check continuity". Not for video scripts.
+description: Long serialised fiction workflow skill (v2.0.0). Supports author-gated and full-auto execution for novels of any length, Chinese or English: bible and outline first, golden 3 chapters first, then one chapter at a time with a chapter contract (8 desires + AI auto payoff sizing), blocking hook/desire/anti-placeholder audit, dynamic cast registration, overdue-aware foreshadowing ledger, and per-character knows lists. File-as-truth, only redo the wrong segment, state rollback on revision. Use when the user says "write a novel", "continue chapter N", "import my manuscript" or "check continuity". Not for video scripts.
 category: Writing
 triggers:
   - write a novel
@@ -14,4 +14,4 @@ triggers:
   - foreshadowing
   - 伏笔
 include_in_prompt: true
-source: original, synthesised from public long-form writing research (2026-11-13) — file-as-truth, chapter contracts, foreshadowing ledgers, knows lists, bounded audit — plus the gates of universal-story-workflow v3.10, translated from video to text. No code or text copied from any surveyed repo.
+source: original, synthesised from public long-form writing research (v1.0.0 2026-11-13, v2.0.0 2026-11-15) — file-as-truth, chapter contracts, foreshadowing ledgers, knows lists, bounded audit, dynamic cast growth — plus the gates of universal-story-workflow v3.10, translated from video to text. No code or text copied from any surveyed repo.

@@ -1,30 +1,37 @@
 #!/usr/bin/env python3
-"""Check one book project's chapters against their contracts.
+"""Check one book project's chapters against their contracts (v2.0.0).
 Stdlib only. Usage: python3 scripts/check_chapter.py <book_dir>
 
 Blocking checks (exit 1 on any failure):
   - every chapters/NNN.md has YAML frontmatter with all required fields
   - filename number matches the `chapter:` field
-  - `desire` is one of the 5 locked desires (en key or zh name)
+  - `desire` is one of the 8 core desires (en key or zh name), or `auto` (warning)
   - `hook`, `transition`, `must_happen`, `characters` are non-empty
-  - prose length is inside the language range (zh: 800-3500 chars, en: 600-3000 words)
+  - prose length is inside the language range (zh: 800-4000 chars, en: 600-3000 words)
   - no banned AI-flavour phrase from data/slop/<lang>.yaml appears in the prose
-Warnings (do not fail): chapter shorter than the serial target
-(zh <2000 chars, en <1500 words) — probes/excerpts are allowed, say so in the contract.
+Warnings (do not fail):
+  - chapter shorter than the serial target (zh <2000 chars, en <1500 words)
+  - `desire` is still `auto` in a committed chapter
+  - chapter title lacks `第N章` / `Chapter N` prefix
 """
 import os
 import re
 import sys
 
 DESIRES = {
-    "curiosity": "好奇", "identification-upgrade": "代入升级",
-    "revenge-compensation": "复仇补偿", "being-loved": "被爱拉扯",
+    "curiosity": "好奇",
+    "identification-upgrade": "代入升级",
+    "revenge-compensation": "复仇补偿",
+    "being-loved": "被爱拉扯",
     "escape-comfort": "逃逸安慰",
+    "survival-breakout": "求生破局",
+    "power-scheme": "博弈掌权",
+    "bond-resonance": "羁绊共鸣",
 }
 DESIRE_ZH = {v: k for k, v in DESIRES.items()}
 REQUIRED = ["chapter", "title", "language", "desire", "hook",
             "transition", "must_happen", "characters"]
-RANGES = {"zh": (800, 3500, 2000, "chars"), "en": (600, 3000, 1500, "words")}
+RANGES = {"zh": (800, 4000, 2000, "chars"), "en": (600, 3000, 1500, "words")}
 
 
 def parse_frontmatter(text):
@@ -71,14 +78,20 @@ def check_book(book):
             if not fields.get(req):
                 failures.append(f"{label}: missing/empty required field `{req}`")
         num = fname[:3]
+        ch_num = int(num)
         if fields.get("chapter") and fields["chapter"].lstrip("0") != num.lstrip("0"):
             failures.append(f"{label}: chapter field {fields['chapter']} != filename {num}")
         lang = fields.get("language", "zh")
         if lang not in RANGES:
             failures.append(f"{label}: unknown language `{lang}` (want zh or en)")
             continue
+        title = fields.get("title", "")
+        if title and not re.match(rf"^(第\s*{ch_num}\s*章|Chapter\s+{ch_num}\b)", title, re.I):
+            warnings.append(f"{label}: title {title!r} lacks `第{ch_num}章` / `Chapter {ch_num}` prefix")
         desire = fields.get("desire", "")
-        if desire not in DESIRES and desire not in DESIRE_ZH:
+        if desire == "auto":
+            warnings.append(f"{label}: desire is `auto` — resolve to one of the 8 core desires in commit")
+        elif desire not in DESIRES and desire not in DESIRE_ZH:
             failures.append(f"{label}: unknown desire `{desire}` (want one of {sorted(DESIRES)})")
         lo, hi, target, unit = RANGES[lang]
         if lang == "zh":

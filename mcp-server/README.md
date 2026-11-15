@@ -237,5 +237,15 @@ says so.
   notes, not failures: the chapter not yet in `progress.md`, a thread it
   pays still showing `open`, a thread it plants still missing from the
   ledger.
-- **Version:** the server is v1.0.0, matching skill v1.0.0. The skill
-  version was not bumped for this addition.
+- **Version:** the server & studio workbench are **v2.0.0**, matching skill v2.0.0 (8 desires + `auto`, 4000-char zh cap, dynamic cast growth, full-auto chapter loop, and recycle bin).
+
+## Web Workbench (Long Novel Studio)
+
+This `mcp-server/` folder also ships the complete full-stack web workbench (`server.ts`, `server/`, `src/`):
+
+```bash
+cd mcp-server
+npm install
+# Set GEMINI_API_KEY in .env (see .env.example)
+npm run dev   # starts the Studio workbench on http://localhost:3000
+```

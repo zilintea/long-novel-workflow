@@ -16,7 +16,7 @@ the characters, or the foreshadowing — in Chinese or English.
   per-character `knows` lists, hard-constraints-first prompting, and a blocking
   hook + desire audit per chapter. Only the wrong segment is redone, and a
   revision rolls its committed state back first.
-- **Current version:** v1.0.0 (2026-11-13). MIT license.
+- **Current version:** v2.0.0 (2026-11-15). MIT license.
 
 > 中文版：[`README.zh-CN.md`](README.zh-CN.md)
 
@@ -46,42 +46,44 @@ Continue my manuscript from chapter 21
 Import my old draft and continue it
 ```
 
-### Step 3 — Approve three gates, get chapters
+### Step 3 — Author-gated or Full-Auto per chapter
 
-1. **Bible + outline** — world, characters, rules, voice. You approve before any prose.
-2. **Golden 3 chapters** — chapters 1–3, read and diagnosed, before the serial commits.
+1. **Bible + outline** — world, characters, rules, voice (Gate 1).
+2. **Golden 3 chapters** — chapters 1–3, read and diagnosed before bulk serialising (Gate 2).
 3. **Each chapter** — contract → draft → sub-review → bounded revise → `CHAPTER_COMMIT`.
-   Only a committed chapter's facts enter canon. A draft that is not committed
-   does not exist in canon.
+   Only a committed chapter's facts enter canon; newly introduced supporting characters
+   (`new_characters`) are registered atomically into `bible/characters.md` and `state/knows.md`.
 
-**Nothing advances automatically.** Every gate needs your approval.
+Supports both **Author-Gated** approval and **Full-Auto** chapter execution (without forcing
+manual contract forms). Every chapter still passes the blocking audit before canon commit.
 
 ---
 
-## Defaults (v1.0.0, locked in the v3 proposal)
+## Defaults (v2.0.0)
 
 | Item | Default |
 |---|---|
 | Language | Chinese first; English is phase 2 (`data/languages/zh.yaml`, `en.yaml`) |
-| Length | 120–180 chapter serial; 1–3 chapter short-story probe |
-| Chapter length | zh 2000–3000 characters; en 1500–2500 words |
+| Length | 120–180 chapter serial (unbounded long-form); 1–3 chapter short-story probe |
+| Chapter length | zh 2000–4000 characters (hard range 800–4000); en 1500–2500 words |
 | Pilot formula | Rebirth-revenge + identity-suspense + strong-relationship (title/names after market scan) |
 | Primary platform | zh: Fanqie / Qimao; en: Royal Road (see `docs/TRAFFIC.md`) |
-| Desire payoff | Every chapter pays off ≥1 of 5 desires; small payoff every 3 chapters, big payoff every 10 |
+| Desire payoff | Every chapter pays off ≥1 of **8 desires** (`auto` supported); `payoff_size` defaults to `auto` (AI executes small ~3 / big ~10) |
+| Cast & Continuity | Anti-nameless-NPC check, dynamic character registration, `open\|progressing\|paid\|deferred` foreshadowing, `第N章` title prefix |
 
-The 5 desires: curiosity, identification-upgrade, revenge-compensation,
-being-loved tension, escape-comfort. See `docs/HOOKS_AND_DESIRE.md`.
+The 8 desires: curiosity, identification-upgrade, revenge-compensation,
+being-loved, escape-comfort, survival-breakout, power-scheme, bond-resonance.
+See `docs/HOOKS_AND_DESIRE.md`.
 
-## Launch skills (5, v1.0.0)
+## Launch skills (5, v2.0.0)
 
 1. Market scan / deconstruction — what is actually being read, and why.
 2. Packaging — title, cover brief, blurb, keywords.
-3. Character forging — dossiers, arcs, knows lists.
+3. Character forging — dossiers, arcs, knows lists, plus ongoing supporting cast growth.
 4. Bilingual de-slop — Chinese + English AI-flavour lists (`data/slop/`).
 5. Simple manuscript import — reverse-engineer an old draft into bible/outline/state.
 
-Worldbuilding is a thin card in v1.0, not a full system. Later slots: full
-worldbuilding, dialogue doctor, reader panel, audio adaptation, bilingual adaptation.
+Worldbuilding is a thin card by default, keeping focus on story momentum.
 
 ## Checks (run them — they are real, not stubs)
 

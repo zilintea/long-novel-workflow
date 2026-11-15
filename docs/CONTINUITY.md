@@ -45,9 +45,47 @@ ledger advanced but the prose was not saved".
 ## State rollback
 
 If a chapter is revised after committing, roll its committed facts back first:
-remove its summary lines, its ledger updates, its knows additions and its
-timeline entries, then re-commit the revised chapter. The ledger must never
-carry facts from a version of a chapter that no longer exists.
+remove its summary lines, its ledger updates, its knows additions, any characters
+first added in that chapter, and its timeline entries, then re-commit the revised
+chapter. The ledger must never carry facts from a version of a chapter that no
+longer exists.
+
+## Dynamic cast growth & anti-nameless-NPC protocol (v2.0.0)
+
+Long serials atrophy into solo-protagonist monologues when every new scene
+defaults to the hero alone or relies on nameless placeholders (`黑衣人`, `神秘人`,
+`路人`, `店小二`, `stranger`, `guard`). To prevent cast thinning without bloating
+Step 1:
+
+- **No fixed character cap (seed core cast first):** Step 1 establishes **3–5 core
+  starting roles** rather than pre-generating dozens of unused background characters.
+  Additional cast members are forged on demand as arcs expand.
+- **Mid-story character forging & timely debut:** Any character forged mid-serial
+  inherits the book's era, world rules, culture anchors, and narrator voice, adds a
+  distinct `speech_style` and concrete `debut_plan` (how and around which chapter
+  they cut into active threads), and receives initial `state/knows.md` boundaries.
+- **Canon locking after debut:** Un-appeared characters remain freely editable (and
+  removable) in `bible/characters.md` until they enter prose. Once a character
+  appears in committed/drafted chapters, their canonical bio/DNA/origin is locked
+  immutable to avoid retroactive retcons; ongoing development updates
+  `state/character_state.md` and `state/knows.md` instead.
+- Every serial chapter (`>= 2`) should bring in **2–4 named characters** with clear
+  stakes, rotating existing cast alongside newly introduced allies/rivals.
+- Whenever a chapter needs a witness, antagonist agent, or new ally, **forge a real
+  named character** (full name, role, visual/behavioural DNA, want/flaw, and initial
+  `knows` entry) via `new_characters` instead of a generic label.
+- `CHAPTER_COMMIT` atomically registers `new_characters` into `bible/characters.md`
+  and `state/knows.md`; `rollbackChapter` cleans them up if the chapter is rolled back.
+
+## Overdue foreshadowing & anti-phantom-thread rule (v2.0.0)
+
+- Ledger entries support four statuses: `open | progressing | paid | deferred`
+  (with optional `target_chapter` when extended/deferred).
+- Before drafting chapter N, inspect overdue and due-soon threads: pull them into
+  the next chapter contract (`progressing` or `paid`) or explicitly reschedule them
+  (`deferred` + `target_chapter`).
+- **No phantom threads:** never reference an `Fxx` id in `foreshadowing_paid` unless
+  that id already exists in `state/foreshadowing.md` (or is planted by the same chapter).
 
 ## What is loaded per chapter
 
