@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 2026-11-16 — packaging fix (after v2.0.0, main only)
+- `mcp-server/package.json`: esbuild `^0.25.0` → `^0.28.0`. vite 8 requires
+  esbuild `^0.27 || ^0.28`; the old range made `npm install` fail with
+  ERESOLVE, so the v2.0.0 tree could not be installed at all (the one-click
+  installer, which pulls `main`, failed at step 4). Same fix the local studio
+  already carried since 2026-11-13.
+- Added `mcp-server/package-lock.json` (lockfileVersion 3, 330 packages,
+  esbuild 0.28.2, vite 8.3.8), generated from the fixed `package.json`.
+  Verified with a clean `npm install` (241 packages) + `tsc --noEmit`
+  (0 errors) + smoke test 26/26. Skill rules unchanged; version stays 2.0.0.
+
 ## v2.0.0 (2026-11-15) — 8 Desires, AI Auto Execution, Dynamic Cast & Continuity Hardening
 - **Expanded core desires (5 → 8) + `auto` default:** added `survival-breakout` (求生破局), `power-scheme` (博弈掌权), and `bond-resonance` (羁绊共鸣) across `scripts/check_chapter.py`, `scripts/check_hooks.py`, `docs/HOOKS_AND_DESIRE.md`, templates, and MCP server. Chapter `desire` and `payoff_size` now support `auto` so AI dynamically picks and executes the right desire and payoff rhythm without forcing manual form-filling.
 - **Chinese chapter cap raised to 4000 characters:** updated `data/languages/zh.yaml` and `scripts/check_chapter.py` (`zh` hard range `800–4000` chars, serial target `2000–4000`, token budget `14000`) and synced `mcp-server` prose warnings (`800–4000`).
