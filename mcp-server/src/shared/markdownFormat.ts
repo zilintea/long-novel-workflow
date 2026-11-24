@@ -78,6 +78,19 @@ export function formatBookAsMarkdownFiles(book: BookProject): Record<string, str
     `- Scale estimate: ${book.outline.compass.scaleEstimate}`,
     `- Central question: ${book.outline.compass.centralQuestion}`,
     `- What this book is NOT: ${book.outline.compass.whatBookIsNot}`,
+    ...(book.outline.compass.targetChapters != null
+      ? [`- Target chapters: ${book.outline.compass.targetChapters}`]
+      : []),
+    ...(book.outline.compass.targetWords != null
+      ? [`- Target words: ${book.outline.compass.targetWords}`]
+      : []),
+    ...(book.outline.compass.tolerance != null
+      ? [`- Tolerance: ${book.outline.compass.tolerance}`]
+      : []),
+    `- Book status: ${book.bookStatus ?? 'ongoing'}`,
+    ...(book.outline.compass.endingSummary
+      ? [`- Ending summary: ${book.outline.compass.endingSummary}`]
+      : []),
     '',
     `## Current arc (${book.outline.currentArc.rangeLabel})`,
     `- Arc goal: ${book.outline.currentArc.goal}`,
@@ -90,6 +103,14 @@ export function formatBookAsMarkdownFiles(book: BookProject): Record<string, str
     ...book.outline.roadmap.map(
       (r) => `| ${r.chapter} | ${r.goal} | ${r.desire} | ${r.hook} | ${r.status} |`
     ),
+    // 隔离段落：完整终局蓝图只供导演（圣经/合同/复盘）读取，正文读取上下文时跳过本段。
+    ...(book.outline.compass.plannedEnding
+      ? [
+          '',
+          '## Planned ending (director-only)',
+          book.outline.compass.plannedEnding,
+        ]
+      : []),
   ].join('\n');
 
   files['state/progress.md'] = [
@@ -116,7 +137,7 @@ export function formatBookAsMarkdownFiles(book: BookProject): Record<string, str
     '',
     ...book.state.foreshadowing.map(
       (f) =>
-        `- ${f.id} | planted: ${f.planted} | payoff_due: ${f.payoffDue} | status: ${f.status} | thread: ${f.thread}`
+        `- ${f.id} | planted: ${f.planted} | payoff_due: ${f.payoffDue} | status: ${f.status} | scope: ${f.scope ?? 'series'} | kind: ${f.kind ?? 'other'} | thread: ${f.thread}`
     ),
   ].join('\n');
 
@@ -155,6 +176,10 @@ export function formatBookAsMarkdownFiles(book: BookProject): Record<string, str
       `characters: ${c.characters.join(', ')}`,
       `foreshadowing_planted: ${c.foreshadowingPlanted.join(', ') || '-'}`,
       `foreshadowing_paid: ${c.foreshadowingPaid.join(', ') || '-'}`,
+      `chapter_kind: ${c.chapterKind ?? 'main'}`,
+      ...(c.bigCadenceSnapshot != null
+        ? [`big_cadence_snapshot: ${c.bigCadenceSnapshot}`]
+        : []),
       '---',
       '',
       ch.prose,

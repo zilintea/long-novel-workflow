@@ -19,6 +19,7 @@ import type {
   BookProject,
   ChapterContract,
   ChapterItem,
+  ChapterKind,
   CharacterProfile,
   CommitProposal,
   ContractDesireSetting,
@@ -27,12 +28,15 @@ import type {
 } from '../shared/types.ts';
 import { DESIRE_SPECS, formatChapterTitle, LANGUAGE_SPECS } from '../shared/skillSpecs.ts';
 import { countProseSize, runDeterministicAudit } from '../shared/auditEngine.ts';
+import { bigCadenceFor, effectiveTolerance, getPhaseInfo } from '../shared/phase.ts';
 import {
   arcReviewApi,
   autoChapterBundleApi,
   boundedReviseApi,
   commitChapterApi,
+  downloadSequelSeedApi,
   draftContractApi,
+  getBookApi,
   prepareCommitApi,
   rollbackChapterApi,
   streamWriteChapterApi,
@@ -142,6 +146,52 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     () => [...book.chapters].sort((a, b) => a.chapter - b.chapter),
     [book.chapters]
   );
+
+  // 终局状态（手册 §五.2 / §七）：主线已提交章、主线字数、未结主线伏笔、下章阶段。
+  const maxCommittedMain = useMemo(
+    () =>
+      Math.max(
+        0,
+        ...book.chapters
+          .filter(
+            (c) => c.status === 'committed' && (c.contract.chapterKind ?? 'main') === 'main'
+          )
+          .map((c) => c.chapter)
+      ),
+    [book.chapters]
+  );
+  const mainWords = useMemo(
+    () =>
+      book.chapters
+        .filter((c) => (c.contract.chapterKind ?? 'main') === 'main' && c.prose)
+        .reduce((sum, c) => sum + countProseSize(c.prose, book.language), 0),
+    [book.chapters, book.language]
+  );
+  const unclosedMainThreads = useMemo(
+    () =>
+      book.state.foreshadowing.filter(
+        (f) => (f.status === 'open' || f.status === 'progressing') && (f.scope ?? 'series') !== 'episode'
+      ),
+    [book.state.foreshadowing]
+  );
+  const isCompleted = book.bookStatus === 'completed';
+  const nextPhaseInfo = useMemo(() => {
+    const t = book.outline.compass.targetChapters;
+    if (t == null) return null;
+    return getPhaseInfo(maxCommittedMain + 1, 1, t, book.outline.compass.tolerance);
+  }, [book.outline.compass.targetChapters, book.outline.compass.tolerance, maxCommittedMain]);
+  // Gate 3 入口：已进收官窗口（不自动完结，作者点开审核）。
+  const showGate3Entry = !isCompleted && nextPhaseInfo != null && nextPhaseInfo.phase === 'finale';
+
+  const [saveQuota, setSaveQuota] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('longnovel-save-quota') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [gate3Open, setGate3Open] = useState(false);
+  const [gate3Actions, setGate3Actions] = useState<Record<string, 'archive' | 'sequel'>>({});
 
   const [selectedChapterNum, setSelectedChapterNum] = useState<number>(() => {
     return sortedChapters[sortedChapters.length - 1]?.chapter || 1;
@@ -270,7 +320,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     return () => window.clearTimeout(timer);
   }, [draftContract, draftProse, activeChapter, busyAction]);
 
-  const handleCreateNextChapter = async () => {
+  const handleCreateNextChapter = async (kind: ChapterKind = 'main') => {
     setErrorMsg(null);
     const maxCh = sortedChapters.length > 0 ? sortedChapters[sortedChapters.length - 1].chapter : 0;
     const nextNum = maxCh + 1;
@@ -289,6 +339,15 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       dueThreads.length > 0
         ? `【待引入/逾期伏笔】${dueThreads.map((f) => `${f.id}(${f.thread})`).join('；')}`
         : '';
+    const kindGoal =
+      kind === 'epilogue'
+        ? '后记：收束全书余韵，交代主要人物归宿，不开新主线冲突'
+        : kind === 'extra'
+          ? '番外：独立小场景，不影响正史时间线'
+          : roadmapRow?.goal || '';
+    const kindTitle =
+      kind === 'epilogue' ? '后记' : kind === 'extra' ? '番外' : shortGoalTitle;
+    const cadence = bigCadenceFor(book.outline.compass.targetChapters);
 
     const newChapter: ChapterItem = {
       chapter: nextNum,
@@ -296,18 +355,20 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
       updatedAt: new Date().toISOString(),
       contract: {
         chapter: nextNum,
-        title: formatChapterTitle(nextNum, shortGoalTitle, book.language),
+        title: formatChapterTitle(nextNum, kindTitle, book.language),
         language: book.language,
         desire: 'auto',
-        desirePayoff: roadmapRow?.goal || '',
-        payoffSize: nextNum % 10 === 0 ? 'big' : 'auto',
+        desirePayoff: kindGoal,
+        payoffSize:
+          kind === 'main' && cadence != null && nextNum % cadence === 0 ? 'big' : 'auto',
         hook: roadmapRow?.hook || '',
         transition: prevCh ? `承接上一章：${prevCh.contract.transition}` : '开篇第一幕',
-        mustHappen: [roadmapRow?.goal || '', dueHint].filter(Boolean).join('；'),
+        mustHappen: [kindGoal, kind === 'main' ? dueHint : ''].filter(Boolean).join('；'),
         mustNot: '不可违背故事圣经硬约束；不可泄露角色未知信息；严禁虚构前文不存在的旧伏笔',
         characters: pickInitialChapterCharacters(book, nextNum),
         foreshadowingPlanted: [],
         foreshadowingPaid: [],
+        chapterKind: kind,
         isProbe: false,
       },
       prose: '',
@@ -499,12 +560,69 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
     setBusyAction('auto-serialize');
 
     let workingBook = book;
+    // 连写启动时记下 outlineRevision；期间作者改了目标/结局/卷纲则停下（手册 §九）。
+    const startRevision = workingBook.outlineRevision ?? 1;
 
     try {
       for (let i = 0; i < count; i++) {
         if (stopAutoRef.current) {
           setStatusNotice('已手动停止全自动连写，当前已保存章节均已保留。');
           break;
+        }
+
+        // ① 迟到淘汰：台账页的罗盘已改过（服务端 outlineRevision 变了），本轮连写作废。
+        try {
+          const fresh = await getBookApi(workingBook.id);
+          if ((fresh.outlineRevision ?? 1) !== startRevision) {
+            setStatusNotice(
+              '连写期间目标/结局/卷纲已被修改，本轮连写已停下（旧设定作废），请按新设定重新开始连写。'
+            );
+            break;
+          }
+        } catch {
+          // 读不到最新版本不阻断连写（离线/本地模式），继续用当前书。
+        }
+
+        // ② 终章前停下：已进收官窗口且主线伏笔收束 → 停并建议 Gate 3；
+        //    已超出收官窗口 → 停并让作者选收官或扩纲（手册 §七.3）。
+        const targetCh = workingBook.outline.compass.targetChapters;
+        if (targetCh != null) {
+          const committedMain = Math.max(
+            0,
+            ...workingBook.chapters
+              .filter(
+                (c) =>
+                  c.status === 'committed' && (c.contract.chapterKind ?? 'main') === 'main'
+              )
+              .map((c) => c.chapter)
+          );
+          const nextMainNum = committedMain + 1;
+          const phase = getPhaseInfo(
+            nextMainNum,
+            1,
+            targetCh,
+            workingBook.outline.compass.tolerance
+          );
+          if (phase == null) break;
+          if (phase.beyondBy > 0) {
+            setStatusNotice(
+              `已超出预定收官窗口 ${phase.beyondBy} 章（目标 ${targetCh} 章 ±${phase.tolerance}）。连写已停下：请到台账页确认收官（Gate 3）或调整目标章数扩纲。`
+            );
+            break;
+          }
+          if (phase.phase === 'finale') {
+            const unclosed = workingBook.state.foreshadowing.filter(
+              (f) =>
+                (f.status === 'open' || f.status === 'progressing') &&
+                (f.scope ?? 'series') !== 'episode'
+            );
+            if (unclosed.length === 0) {
+              setStatusNotice(
+                '已进入收官窗口且主线伏笔已收束。连写已停下，建议申请完结审核（Gate 3）确认终章。'
+              );
+              break;
+            }
+          }
         }
 
         // Determine target chapter
@@ -572,6 +690,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
               dueThreads.length > 0
                 ? `【待引入/逾期伏笔】${dueThreads.map((f) => `${f.id}(${f.thread})`).join('；')}`
                 : '';
+            const cadence = bigCadenceFor(workingBook.outline.compass.targetChapters);
             targetChapterObj = {
               chapter: nextNum,
               status: 'draft',
@@ -582,7 +701,8 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
                 language: workingBook.language,
                 desire: 'auto',
                 desirePayoff: roadmapRow?.goal || '',
-                payoffSize: nextNum % 10 === 0 ? 'big' : 'auto',
+                payoffSize:
+                  cadence != null && nextNum % cadence === 0 ? 'big' : 'auto',
                 hook: roadmapRow?.hook || '',
                 transition: prevCh ? `承接上一章：${prevCh.contract.transition}` : '开篇第一幕',
                 mustHappen: [roadmapRow?.goal || '', dueHint].filter(Boolean).join('；'),
@@ -611,20 +731,39 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         let proposal: CommitProposal | null = null;
 
         if (!prose.trim()) {
-          // Single-call full-auto generation (Contract + Prose + Commit State) to minimize API quota usage
-          setStatusNotice(`[全自动 ${i + 1}/${count}] 正在一并生成第 ${chNum} 章合同、正文与正史状态...`);
-          const bundled = await autoChapterBundleApi({
-            book: workingBook,
-            chapterNum: chNum,
-            existingContract: contract,
-            authorGuidance: [contractNote, proseGuidance].filter(Boolean).join('；'),
-          });
-          contract = bundled.contract;
-          prose = bundled.prose;
-          proposal = bundled.proposal;
-          workingBook = mergeNewCharactersIntoBook(workingBook, proposal.newCharacters, chNum);
-          setDraftContract(contract);
-          setDraftProse(prose);
+          if (saveQuota) {
+            // 省配额单次合并路径（用户显式勾选）：合同+正文一次请求，
+            // 提示词明令不得外露结尾细节（手册 §四.4）。
+            setStatusNotice(`[全自动 ${i + 1}/${count}] 正在一并生成第 ${chNum} 章合同、正文与正史状态（省配额模式）...`);
+            const bundled = await autoChapterBundleApi({
+              book: workingBook,
+              chapterNum: chNum,
+              existingContract: contract,
+              authorGuidance: [contractNote, proseGuidance].filter(Boolean).join('；'),
+              singleRequest: true,
+            });
+            contract = bundled.contract;
+            prose = bundled.prose;
+            proposal = bundled.proposal;
+            workingBook = mergeNewCharactersIntoBook(workingBook, proposal.newCharacters, chNum);
+            setDraftContract(contract);
+            setDraftProse(prose);
+          } else {
+            // 默认两步隔离（手册 §四）：合同步可看 endingSummary → 正文步盲写，
+            // 正文提示词里看不到 plannedEnding 与 endingSummary。
+            setStatusNotice(`[全自动 ${i + 1}/${count}] 正在起草第 ${chNum} 章合同...`);
+            const res = await draftContractApi(workingBook, chNum, contractNote, contract);
+            contract = res.contract;
+            workingBook = mergeNewCharactersIntoBook(workingBook, res.newCharacters, chNum);
+            setDraftContract(contract);
+            setStatusNotice(`[全自动 ${i + 1}/${count}] 正在按合同写第 ${chNum} 章正文（盲写，不见结局）...`);
+            let accumulated = '';
+            await streamWriteChapterApi(workingBook, contract, proseGuidance, (chunk) => {
+              accumulated += chunk;
+              setDraftProse(accumulated);
+            });
+            prose = accumulated;
+          }
         } else {
           if (
             contract.desire === 'auto' ||
@@ -650,6 +789,13 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           prose,
         };
         const report = runDeterministicAudit(workingBook, candidateItem, slopZh, slopEn);
+        // 跨章重复不是局部能修的：复述前章整段只能重写，不能打补丁；更不能入库。
+        // 停在这里，该章草稿不入库，下次重新生成时再写。
+        const dupIssue = report.issues.find((iss) => iss.id.startsWith('canon-repeat-prev-'));
+        if (dupIssue) {
+          setErrorMsg(`${dupIssue.message} 已停止全自动连写；该章草稿未入库，重新生成后再继续。`);
+          break;
+        }
         if (!report.passed) {
           const blockingText = report.issues
             .filter((iss) => iss.severity === 'blocking')
@@ -679,7 +825,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           setStatusNotice(`[全自动 ${i + 1}/${count}] 正在执行第 ${chNum} 章 CHAPTER_COMMIT 原子入库...`);
         }
 
-        const committedBook = await commitChapterApi(workingBook, proposal);
+        const committedBook = await commitChapterApi(workingBook, proposal, startRevision);
         workingBook = committedBook;
         await onSaveBook(committedBook);
 
@@ -787,7 +933,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         ),
       };
       await onSaveBook(updatedDraftBook);
-      const updated = await commitChapterApi(updatedDraftBook, commitProposal);
+      const updated = await commitChapterApi(updatedDraftBook, commitProposal, book.outlineRevision ?? 1);
       await onSaveBook(updated);
       setCommitProposal(null);
       setStatusNotice(`第 ${commitProposal.chapter} 章已完成 CHAPTER_COMMIT 原子提交，正史与台账已同步更新`);
@@ -816,6 +962,61 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
   const handleApproveGate2 = async () => {
     await onSaveBook({ ...book, gate2Approved: true });
     setStatusNotice('Gate 2（黄金三章诊断）已确认通过，现可进入连载创作循环');
+  };
+
+  // Gate 3 完结审核（手册 §七）：作者确认后才完结；现场可把剩余 open 线
+  // 归档（本卷收束）或留给续作（导出种子时带走）。完结后只收起主线入口，
+  // 后记/番外仍可写，删终章回退由服务端 trashChapter 处理。
+  const handleConfirmComplete = async () => {
+    setErrorMsg(null);
+    setBusyAction('gate3-complete');
+    try {
+      const nextThreads = book.state.foreshadowing.map((f) => {
+        const action = gate3Actions[f.id];
+        if (!action) return f;
+        return action === 'archive' ? { ...f, status: 'archived' as const } : f;
+      });
+      await onSaveBook({
+        ...book,
+        bookStatus: 'completed',
+        completedAtChapter: maxCommittedMain,
+        state: { ...book.state, foreshadowing: nextThreads },
+      });
+      setGate3Open(false);
+      setStatusNotice(
+        `《${book.title}》已完结于第 ${maxCommittedMain} 章（正篇 ${mainWords.toLocaleString()} 字）。可写后记/番外，或导出续作种子开新卷。`
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleReopenBook = async () => {
+    setErrorMsg(null);
+    setBusyAction('gate3-reopen');
+    try {
+      await onSaveBook({ ...book, bookStatus: 'ongoing', completedAtChapter: undefined });
+      setStatusNotice('已重新开卷，主线入口恢复。');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleExportSequelSeed = async () => {
+    setErrorMsg(null);
+    setBusyAction('export-seed');
+    try {
+      await downloadSequelSeedApi(book);
+      setStatusNotice('续作种子 JSON 已下载，可在建书时用「续作种子导入」开新卷。');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(null);
+    }
   };
 
   const handleDeleteDraftChapter = async () => {
@@ -914,55 +1115,120 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
         </div>
 
         <div className="flex flex-col gap-2 pt-2 border-t border-zinc-100">
-          <button
-            type="button"
-            disabled={busyAction !== null}
-            onClick={handleCreateNextChapter}
-            className="w-full py-2 px-3 flex items-center justify-center gap-1.5 text-sm font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
-          >
-            <Plus className="w-4 h-4" />
-            <span>新建第 {(sortedChapters[sortedChapters.length - 1]?.chapter || 0) + 1} 章</span>
-          </button>
+          {isCompleted ? (
+            <>
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-950">
+                本书已完结于第 {book.completedAtChapter ?? maxCommittedMain} 章。主线入口已收起，
+                后记/番外仍按顺序递增章号，不计入主线进度。
+              </div>
+              <button
+                type="button"
+                disabled={busyAction !== null}
+                onClick={() => handleCreateNextChapter('epilogue')}
+                className="w-full py-2 px-3 flex items-center justify-center gap-1.5 text-sm font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+              >
+                <Plus className="w-4 h-4" />
+                <span>写后记（第 {(sortedChapters[sortedChapters.length - 1]?.chapter || 0) + 1} 章）</span>
+              </button>
+              <button
+                type="button"
+                disabled={busyAction !== null}
+                onClick={() => handleCreateNextChapter('extra')}
+                className="w-full py-2 px-3 flex items-center justify-center gap-1.5 text-sm font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+              >
+                <Plus className="w-4 h-4" />
+                <span>写番外（第 {(sortedChapters[sortedChapters.length - 1]?.chapter || 0) + 1} 章）</span>
+              </button>
+              <button
+                type="button"
+                disabled={busyAction !== null}
+                onClick={handleReopenBook}
+                className="w-full py-2 px-3 flex items-center justify-center gap-1.5 text-sm font-medium text-zinc-700 bg-white border border-zinc-300 hover:bg-zinc-50 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>重新开卷（恢复主线）</span>
+              </button>
+              <button
+                type="button"
+                disabled={busyAction !== null}
+                onClick={handleExportSequelSeed}
+                className="w-full py-2 px-3 flex items-center justify-center gap-1.5 text-sm font-medium text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+              >
+                <span>{busyAction === 'export-seed' ? '导出中...' : '导出续作种子（JSON）'}</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={busyAction !== null}
+                onClick={() => handleCreateNextChapter()}
+                className="w-full py-2 px-3 flex items-center justify-center gap-1.5 text-sm font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+              >
+                <Plus className="w-4 h-4" />
+                <span>新建第 {(sortedChapters[sortedChapters.length - 1]?.chapter || 0) + 1} 章</span>
+              </button>
 
-          <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-lg flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-2 text-xs">
-              <span className="font-semibold text-blue-950">全自动长篇连写</span>
-              <select
-                value={autoBatchTarget}
-                onChange={(e) => setAutoBatchTarget(Number(e.target.value))}
-                disabled={busyAction !== null}
-                className="px-2 py-1 text-xs bg-white border border-blue-200 rounded font-mono"
-                aria-label="自动连写章数"
-              >
-                <option value={1}>连写 1 章</option>
-                <option value={3}>连写 3 章</option>
-                <option value={5}>连写 5 章</option>
-                <option value={10}>连写 10 章</option>
-              </select>
-            </div>
-            {busyAction === 'auto-serialize' ? (
-              <button
-                type="button"
-                onClick={() => {
-                  stopAutoRef.current = true;
-                }}
-                className="w-full py-2 px-3 flex items-center justify-center gap-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg cursor-pointer"
-              >
-                <Square className="w-3.5 h-3.5" />
-                <span>停止连写（保留已写章节）</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={busyAction !== null}
-                onClick={() => runAutoSerialize(autoBatchTarget, false)}
-                className="w-full py-2 px-3 flex items-center justify-center gap-1.5 text-xs font-medium text-white bg-blue-700 hover:bg-blue-800 rounded-lg cursor-pointer disabled:opacity-50"
-              >
-                <Play className="w-3.5 h-3.5" />
-                <span>自动连写 {autoBatchTarget} 章（含合同与入库）</span>
-              </button>
-            )}
-          </div>
+              <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-lg flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="font-semibold text-blue-950">全自动长篇连写</span>
+                  <select
+                    value={autoBatchTarget}
+                    onChange={(e) => setAutoBatchTarget(Number(e.target.value))}
+                    disabled={busyAction !== null}
+                    className="px-2 py-1 text-xs bg-white border border-blue-200 rounded font-mono"
+                    aria-label="自动连写章数"
+                  >
+                    <option value={1}>连写 1 章</option>
+                    <option value={3}>连写 3 章</option>
+                    <option value={5}>连写 5 章</option>
+                    <option value={10}>连写 10 章</option>
+                  </select>
+                </div>
+                <label className="flex items-start gap-1.5 text-[11px] text-blue-950 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={saveQuota}
+                    onChange={(e) => {
+                      setSaveQuota(e.target.checked);
+                      try {
+                        localStorage.setItem('longnovel-save-quota', e.target.checked ? '1' : '0');
+                      } catch {
+                        // 忽略本地存储失败
+                      }
+                    }}
+                    disabled={busyAction !== null}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    省配额单次合并请求（合同+正文一次调用；默认关，两步隔离更防泄底）
+                  </span>
+                </label>
+                {busyAction === 'auto-serialize' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopAutoRef.current = true;
+                    }}
+                    className="w-full py-2 px-3 flex items-center justify-center gap-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg cursor-pointer"
+                  >
+                    <Square className="w-3.5 h-3.5" />
+                    <span>停止连写（保留已写章节）</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busyAction !== null}
+                    onClick={() => runAutoSerialize(autoBatchTarget, false)}
+                    className="w-full py-2 px-3 flex items-center justify-center gap-1.5 text-xs font-medium text-white bg-blue-700 hover:bg-blue-800 rounded-lg cursor-pointer disabled:opacity-50"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    <span>自动连写 {autoBatchTarget} 章（含合同与入库）</span>
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </aside>
 
@@ -1001,6 +1267,25 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           </div>
         )}
 
+        {/* Gate 3 完结审核入口（手册 §七）：进收官窗口才出现，不自动完结 */}
+        {showGate3Entry && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-3 flex flex-wrap items-center justify-between gap-4">
+            <div className="text-xs text-amber-950">
+              <strong className="font-semibold">已进入终局收官窗口：</strong>
+              主线已写 {maxCommittedMain} 章（目标 {book.outline.compass.targetChapters} 章 ±
+              {nextPhaseInfo!.tolerance}，{nextPhaseInfo!.winStart}–{nextPhaseInfo!.winEnd}{' '}
+              章收官），未结主线伏笔 {unclosedMainThreads.length} 条。可开完结审核，确认终章后完结。
+            </div>
+            <button
+              type="button"
+              onClick={() => setGate3Open(true)}
+              className="px-3 py-1 text-xs font-medium bg-amber-700 hover:bg-amber-800 text-white rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              申请完结审核（Gate 3）
+            </button>
+          </div>
+        )}
+
         {/* Error & Status Feedback */}
         {errorMsg && (
           <div
@@ -1024,7 +1309,7 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
             <p className="text-zinc-600 text-sm mb-4">当前尚无章节，请先创建第 1 章。</p>
             <button
               type="button"
-              onClick={handleCreateNextChapter}
+              onClick={() => handleCreateNextChapter()}
               className="px-4 py-2 text-sm font-medium bg-blue-700 text-white rounded-lg hover:bg-blue-800 cursor-pointer"
             >
               创建第 1 章
@@ -1987,6 +2272,86 @@ export const StudioWorkspace: React.FC<StudioWorkspaceProps> = ({
           </div>
         )}
       </section>
+
+      {/* Gate 3 完结审核弹窗（手册 §七.2） */}
+      {gate3Open && (
+        <div
+          className="fixed inset-0 z-50 bg-zinc-950/50 backdrop-blur-xs flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white border border-zinc-200 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-xl p-6 flex flex-col gap-4">
+            <h3 className="font-display text-lg font-semibold text-zinc-900">
+              完结审核（Gate 3）—《{book.title}》
+            </h3>
+            <div className="text-sm text-zinc-700 space-y-1">
+              <div>终章：第 {maxCommittedMain} 章（正篇主线）</div>
+              <div>
+                统计：正篇 {maxCommittedMain} 章 · {mainWords.toLocaleString()} 字 · 后记/番外{' '}
+                {book.chapters.filter(
+                  (c) => (c.contract.chapterKind ?? 'main') !== 'main'
+                ).length}{' '}
+                篇
+              </div>
+              {book.outline.compass.endingSummary && (
+                <div>一句话结局：{book.outline.compass.endingSummary}</div>
+              )}
+            </div>
+            <div>
+              <div className="text-xs font-semibold text-zinc-800 mb-2">
+                剩余未结伏笔（{unclosedMainThreads.length} 条）— 可现场归档或留给续作
+              </div>
+              {unclosedMainThreads.length === 0 ? (
+                <p className="text-xs text-zinc-600">主线伏笔已全部收束，可以完结。</p>
+              ) : (
+                <ul className="space-y-2">
+                  {unclosedMainThreads.map((f) => (
+                    <li
+                      key={f.id}
+                      className="p-2.5 border border-zinc-200 rounded-lg flex flex-wrap items-center justify-between gap-2"
+                    >
+                      <span className="text-xs text-zinc-800">
+                        {f.id}（{f.thread}）· 约定第 {f.payoffDue} 章
+                      </span>
+                      <select
+                        value={gate3Actions[f.id] ?? ''}
+                        onChange={(e) =>
+                          setGate3Actions((prev) => ({
+                            ...prev,
+                            [f.id]: e.target.value as 'archive' | 'sequel',
+                          }))
+                        }
+                        className="px-2 py-1 text-xs border border-zinc-300 rounded bg-white"
+                      >
+                        <option value="">不处理（留在台账）</option>
+                        <option value="archive">归档（本卷收束，不再追）</option>
+                        <option value="sequel">留给续作（进续作种子）</option>
+                      </select>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                disabled={busyAction !== null}
+                onClick={handleConfirmComplete}
+                className="px-4 py-2 text-sm font-medium bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg cursor-pointer disabled:opacity-50"
+              >
+                {busyAction === 'gate3-complete' ? '完结中...' : '确认全书完结'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setGate3Open(false)}
+                className="px-4 py-2 text-sm font-medium text-zinc-700 border border-zinc-300 rounded-lg cursor-pointer"
+              >
+                暂不完结
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

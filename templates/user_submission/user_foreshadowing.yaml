@@ -1,0 +1,19 @@
+# user_foreshadowing.yaml — 用户供稿伏笔表（source: user，锁定）
+# 每条伏笔必须有 planted 章、payoff_due 章、status。
+# status：open | progressing | paid | deferred | archived。
+threads:
+  - id: F03
+    planted: 3
+    payoff_due: 42
+    status: open
+    thread: 2016年木屋红对联，福字是谁写的
+  - id: F04
+    planted: 1
+    payoff_due: 78
+    status: open
+    thread: 奶奶每天傍晚在门口等的人是谁
+  - id: F05
+    planted: 2
+    payoff_due: 70
+    status: open
+    thread: 父亲为什么烧掉一半底片

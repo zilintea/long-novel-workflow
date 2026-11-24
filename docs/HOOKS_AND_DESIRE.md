@@ -23,16 +23,21 @@ the chapter's plot beat and arc rhythm) while stating in one sentence what the
 chapter actually delivers (`desire_payoff`). A promise with no delivery in the
 chapter is a broken promise; the reader notices by chapter 3.
 
-## Payoff cadence (v2.0.0)
+## Payoff cadence (v2.1.0)
 
 - **Default (`payoff_size: auto`):** AI dynamically chooses and executes the
   payoff intensity according to pacing:
 - **Every chapter:** pays off ≥1 desire, at least partly.
 - **Every 3 chapters:** a small payoff (a secret revealed, a rival humbled,
   a skill levelled up, a tactical escape). Explicit value: `payoff_size: small`.
-- **Every 10 chapters:** a big payoff (an identity revealed, a revenge
+  Required only for draft chapters, and relaxed when T < 10 or short-word mode.
+- **Every big-cadence chapter:** a big payoff (an identity revealed, a revenge
   completed, a major power shift, a relationship turning point). Explicit value:
-  `payoff_size: big`.
+  `payoff_size: big`. The cadence is dynamic — `clamp(round_half_up(0.1T), 5, 20)`
+  (T = target chapters; T < 30 skips big cadence; books without a target fall
+  back to the legacy every-10). Committed chapters are checked against the
+  `big_cadence_snapshot` recorded at commit time, so shrinking the target later
+  never retroactively fails history.
 - **Every chapter ends on a hook.** The hook is a blocking audit:
   `scripts/check_hooks.py` fails a chapter with no hook (`>= 10 chars`), no
   `desire_payoff`, or no `transition`. A chapter that ends flat has no reason to

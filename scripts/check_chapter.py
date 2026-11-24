@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check one book project's chapters against their contracts (v2.0.0).
+"""Check one book project's chapters against their contracts (v2.1.0).
 Stdlib only. Usage: python3 scripts/check_chapter.py <book_dir>
 
 Blocking checks (exit 1 on any failure):
@@ -7,16 +7,26 @@ Blocking checks (exit 1 on any failure):
   - filename number matches the `chapter:` field
   - `desire` is one of the 8 core desires (en key or zh name), or `auto` (warning)
   - `hook`, `transition`, `must_happen`, `characters` are non-empty
-  - prose length is inside the language range (zh: 800-4000 chars, en: 600-3000 words)
+  - prose length (manual §六.2, same as the TS audit):
+      empty prose is blocking for every chapter (including epilogue/extra);
+      main chapters below the probe floor (zh 800 chars / en 600 words) are
+      blocking; main chapters below the serial floor are a warning only
+      (zh 2100 chars, short-word mode 1500, en 1500 words; probe chapters
+      use the probe floor); above the max (zh 4000 / en 2500) is a warning,
+      never blocking. Epilogue/extra chapters skip the size checks.
   - no banned AI-flavour phrase from data/slop/<lang>.yaml appears in the prose
 Warnings (do not fail):
-  - chapter shorter than the serial target (zh <2000 chars, en <1500 words)
+  - chapter below the serial floor (see above)
+  - chapter above the suggested max
   - `desire` is still `auto` in a committed chapter
   - chapter title lacks `第N章` / `Chapter N` prefix
 """
 import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from phase import is_short_word_mode  # noqa: E402
 
 DESIRES = {
     "curiosity": "好奇",
@@ -31,7 +41,8 @@ DESIRES = {
 DESIRE_ZH = {v: k for k, v in DESIRES.items()}
 REQUIRED = ["chapter", "title", "language", "desire", "hook",
             "transition", "must_happen", "characters"]
-RANGES = {"zh": (800, 4000, 2000, "chars"), "en": (600, 3000, 1500, "words")}
+# lang -> (probe floor, serial floor, suggested max, unit)
+RANGES = {"zh": (800, 2100, 4000, "chars"), "en": (600, 1500, 2500, "words")}
 
 
 def parse_frontmatter(text):
@@ -57,6 +68,22 @@ def load_slop(lang, script_dir):
     return phrases
 
 
+def parse_compass(book):
+    """Read Target chapters / Target words from outline/overview.md.
+    Missing keys -> None (old book, legacy fallback)."""
+    text = ""
+    path = os.path.join(book, "outline", "overview.md")
+    if os.path.exists(path):
+        text = open(path, encoding="utf-8").read()
+    def _int(key):
+        m = re.search(rf"^- {key}:\s*(\d+)\s*$", text, re.M)
+        return int(m.group(1)) if m else None
+    return {
+        "target_chapters": _int("Target chapters"),
+        "target_words": _int("Target words"),
+    }
+
+
 def check_book(book):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     ch_dir = os.path.join(book, "chapters")
@@ -66,6 +93,7 @@ def check_book(book):
     files = sorted(f for f in os.listdir(ch_dir) if re.match(r"^\d{3}\.md$", f))
     if not files:
         return ["no chapters/NNN.md files found"], []
+    compass = parse_compass(book)
     for fname in files:
         path = os.path.join(ch_dir, fname)
         text = open(path, encoding="utf-8").read()
@@ -93,17 +121,32 @@ def check_book(book):
             warnings.append(f"{label}: desire is `auto` — resolve to one of the 8 core desires in commit")
         elif desire not in DESIRES and desire not in DESIRE_ZH:
             failures.append(f"{label}: unknown desire `{desire}` (want one of {sorted(DESIRES)})")
-        lo, hi, target, unit = RANGES[lang]
+        lo, target, hi, unit = RANGES[lang]
         if lang == "zh":
             body = re.sub(r"\s+", "", prose)
             size = len(body)
         else:
             size = len(re.findall(r"[A-Za-z']+", prose))
-        if size < lo or size > hi:
-            failures.append(f"{label}: prose {size} {unit} outside range {lo}-{hi}")
-        elif size < target:
-            warnings.append(f"{label}: prose {size} {unit} below serial target {target} "
-                            f"(ok for a probe/excerpt — say so in the contract)")
+        kind = fields.get("chapter_kind", "main")
+        is_probe = fields.get("is_probe", "").lower() == "true"
+        if size == 0:
+            failures.append(f"{label}: no prose paragraphs found")
+        elif kind != "main":
+            pass  # 后记/番外豁免字数上下限（空正文仍在上面阻断）。
+        else:
+            # 短篇字数模式仅中文生效：下限 1500（手册 §六.2）。
+            min_limit = lo if is_probe else (
+                1500 if (lang == "zh" and is_short_word_mode(
+                    compass["target_chapters"], compass["target_words"])) else target
+            )
+            if size < lo:
+                failures.append(f"{label}: prose {size} {unit} below probe floor {lo}")
+            elif size < min_limit:
+                warnings.append(f"{label}: prose {size} {unit} below serial floor {min_limit} "
+                                f"(ok for a probe/excerpt — say so in the contract)")
+            elif size > hi:
+                warnings.append(f"{label}: prose {size} {unit} above suggested max {hi} "
+                                f"(consider trimming or splitting)")
         for phrase in load_slop(lang, script_dir):
             if phrase and phrase in prose:
                 failures.append(f"{label}: banned AI-flavour phrase found: {phrase!r}")

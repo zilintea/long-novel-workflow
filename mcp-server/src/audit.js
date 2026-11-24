@@ -16,7 +16,11 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { chapterFile, copyBookToTemp, parseFrontmatterFile, removeDir } from './book.js';
 
-const SCRIPTS = ['check_chapter.py', 'check_continuity.py', 'check_hooks.py'];
+// v2.4.0: the contract check and the fidelity check run here too, so the MCP
+// audit/commit path enforces the same gates as the file path. Both scripts
+// skip gracefully (PASS + note) on books without contracts / submissions,
+// so legacy books are unaffected.
+const SCRIPTS = ['check_chapter.py', 'check_continuity.py', 'check_hooks.py', 'check_contract.py', 'check_fidelity.py'];
 
 function runOne(python, script, bookDir, timeoutMs) {
   return new Promise((resolve) => {
@@ -51,6 +55,31 @@ function splitOutput(result) {
     else if (line.startsWith('WARN: ')) warnings.push(line.slice(6));
   }
   return { failures, warnings };
+}
+
+// Run one check script against a book and parse its FAIL:/WARN: lines.
+// Used by the single-script tools (validateSubmission, checkFidelity,
+// checkContract, getSubmissionLevel) — the same scripts the file path runs,
+// so both tracks share one source of truth. Scripts whose output is a
+// report rather than a verdict (submission_level.py) also return their
+// LEVEL:/NEXT:/MISSING: lines in `report`.
+export async function runScript({ python, skillRoot, script, bookDir, timeoutMs = 30000 }) {
+  const result = await runOne(python, path.join(skillRoot, 'scripts', script), bookDir, timeoutMs);
+  const { failures, warnings } = splitOutput(result);
+  const report = [];
+  for (const line of (result.stdout + '\n' + result.stderr).split('\n')) {
+    if (/^(LEVEL|NEXT|MISSING|IMPACT|DECISION NEEDED|MUST-ASK|AI-MAY-FILL|CONTRADICTION|INFO): /.test(line)) report.push(line);
+  }
+  return {
+    script: path.basename(script),
+    pass: result.exitCode === 0 && !result.spawnError,
+    exitCode: result.exitCode,
+    failures,
+    warnings,
+    report,
+    stdout: String(result.stdout || ''),
+    spawnError: result.spawnError,
+  };
 }
 
 // Filter the known pre-commit artifacts for one draft chapter.

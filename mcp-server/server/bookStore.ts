@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { BookProject, CommitProposal, TrashItem } from '../src/shared/types.ts';
+import type { BookProject, CommitProposal, RestructureSnapshot, RetargetInput, TrashItem } from '../src/shared/types.ts';
 import { createSampleEchoesBook } from '../src/shared/skillSpecs.ts';
 import { formatBookAsMarkdownFiles } from '../src/shared/markdownFormat.ts';
+import { bigCadenceFor, effectiveTolerance } from '../src/shared/phase.ts';
 
 export { formatBookAsMarkdownFiles };
 
@@ -66,8 +67,24 @@ export function getBook(id: string): BookProject | null {
 }
 
 export function saveBook(book: BookProject): BookProject {
+  // 乐观锁：罗盘目标/容差/结局/卷配置一旦变化，outlineRevision 自动 +1（服务端为准）。
+  // 客户端传来的版本号不直接采信；正文提交、回滚等不碰罗盘的保存不会 bump。
+  const old = book.id ? getBook(book.id) : null;
+  let outlineRevision = book.outlineRevision ?? old?.outlineRevision ?? 1;
+  if (old) {
+    const changed =
+      JSON.stringify(old.outline.compass.targetChapters) !==
+        JSON.stringify(book.outline.compass.targetChapters) ||
+      JSON.stringify(old.outline.compass.tolerance) !==
+        JSON.stringify(book.outline.compass.tolerance) ||
+      old.outline.compass.plannedEnding !== book.outline.compass.plannedEnding ||
+      old.outline.compass.endingSummary !== book.outline.compass.endingSummary ||
+      JSON.stringify(old.volumes ?? null) !== JSON.stringify(book.volumes ?? null);
+    if (changed) outlineRevision = (old.outlineRevision ?? 1) + 1;
+  }
   const updated: BookProject = {
     ...book,
+    outlineRevision,
     updatedAt: new Date().toISOString(),
   };
   writeBookToDisk(updated);
@@ -125,11 +142,18 @@ export function clearTrashOnDisk(): void {
 
 export function applyAtomicChapterCommit(book: BookProject, proposal: CommitProposal): BookProject {
   const chNum = proposal.chapter;
+  // 提交时记录当时的动态大节奏快照（手册 §六.1）：以后缩纲改目标也不会
+  // 让已提交章被新节奏回溯判错；无快照的已提交章豁免。
+  const cadenceSnapshot = bigCadenceFor(book.outline.compass.targetChapters);
   const updatedChapters = book.chapters.map((ch) =>
     ch.chapter === chNum
       ? {
           ...ch,
           status: 'committed' as const,
+          contract: {
+            ...ch.contract,
+            ...(cadenceSnapshot != null ? { bigCadenceSnapshot: cadenceSnapshot } : {}),
+          },
           updatedAt: new Date().toISOString(),
         }
       : ch
@@ -208,7 +232,8 @@ export function applyAtomicChapterCommit(book: BookProject, proposal: CommitProp
       // Never allow a newly committed chapter to overwrite an earlier chapter's planted thread
       continue;
     }
-    ledgerMap.set(cleanId, { ...nf, id: cleanId, planted: chNum });
+    // 新伏笔默认 scope 'series' / kind 'other'（提交提取时 AI 自动标定）。
+    ledgerMap.set(cleanId, { ...nf, id: cleanId, planted: chNum, scope: nf.scope ?? 'series', kind: nf.kind ?? 'other' });
   }
   for (const upd of proposal.updatedForeshadowing || []) {
     const cleanId = (upd.id || '').trim();
@@ -341,4 +366,156 @@ export function rollbackChapterCommit(book: BookProject, chNum: number): BookPro
       foreshadowing,
     },
   });
+}
+
+// ------------------------------------------------------------------ retarget
+// 调整卷纲（手册 §五.2.4）：改目标章数/容差/结局，先校验超窗伏笔必须有去处
+// （压缩进窗内或归档），保存时记 restructureLog 快照，可恢复。
+
+function snapshotOf(book: BookProject): RestructureSnapshot {
+  return {
+    targetChapters: book.outline.compass.targetChapters,
+    tolerance: book.outline.compass.tolerance,
+    plannedEnding: book.outline.compass.plannedEnding,
+    endingSummary: book.outline.compass.endingSummary,
+    threads: book.state.foreshadowing.map((f) => ({
+      id: f.id,
+      payoffDue: f.payoffDue,
+      status: f.status,
+    })),
+  };
+}
+
+function maxCommittedMainChapter(book: BookProject): number {
+  const mains = book.state.committedChapters.filter((n) => {
+    const ch = book.chapters.find((c) => c.chapter === n);
+    return (ch?.contract.chapterKind ?? 'main') === 'main';
+  });
+  return mains.length > 0 ? Math.max(...mains) : 0;
+}
+
+export function applyRetarget(bookId: string, input: RetargetInput): BookProject {
+  const book = getBook(bookId);
+  if (!book) throw new Error('未找到指定小说工程');
+  const newTol = effectiveTolerance(input.targetChapters, input.tolerance);
+  const maxCommitted = maxCommittedMainChapter(book);
+  if (input.targetChapters + newTol < maxCommitted) {
+    throw new Error(
+      `新目标 ${input.targetChapters} 章（±${newTol}，最晚第 ${input.targetChapters + newTol} 章）小于已提交的最大主线章号 ${maxCommitted}，无法收回已写章节；建议改为“在当前章 +N 章收尾”（如目标 ${maxCommitted + 10} 章）。`
+    );
+  }
+  // 冲突校验：所有未结（open/progressing/deferred）且 payoffDue 超窗的伏笔，
+  // 必须有一条处理意见（压缩到窗内，或归档）；否则拒绝保存。
+  const winEnd = input.targetChapters + newTol;
+  const resolutionMap = new Map(input.threadResolutions.map((r) => [r.id.trim(), r]));
+  const overWindow = book.state.foreshadowing.filter(
+    (f) =>
+      f.status !== 'paid' &&
+      f.status !== 'archived' &&
+      f.payoffDue > winEnd
+  );
+  for (const thread of overWindow) {
+    const res = resolutionMap.get(thread.id.trim());
+    if (!res) {
+      throw new Error(`伏笔 ${thread.id}（${thread.thread}）兑现期第 ${thread.payoffDue} 章超出新完结窗口（最晚第 ${winEnd} 章），请先选择压缩或归档。`);
+    }
+    if (res.action === 'compress') {
+      if (res.newPayoffDue == null || res.newPayoffDue > winEnd || res.newPayoffDue <= thread.planted) {
+        throw new Error(`伏笔 ${thread.id} 的压缩兑现期须在第 ${thread.planted + 1}–${winEnd} 章之间。`);
+      }
+    }
+    if (res.action === 'keep') {
+      throw new Error(`伏笔 ${thread.id} 兑现期第 ${thread.payoffDue} 章超出新完结窗口，不能选“保留原样”，请选择压缩或归档。`);
+    }
+  }
+
+  const before = snapshotOf(book);
+  const foreshadowing = book.state.foreshadowing.map((f) => {
+    const res = resolutionMap.get(f.id.trim());
+    if (!res) return f;
+    if (res.action === 'compress') {
+      return { ...f, payoffDue: res.newPayoffDue!, status: f.status };
+    }
+    if (res.action === 'archive') {
+      return { ...f, status: 'archived' as const };
+    }
+    return f;
+  });
+  const changed: BookProject = {
+    ...book,
+    outline: {
+      ...book.outline,
+      compass: {
+        ...book.outline.compass,
+        targetChapters: input.targetChapters,
+        tolerance: input.tolerance,
+        ...(input.plannedEnding !== undefined ? { plannedEnding: input.plannedEnding } : {}),
+        ...(input.endingSummary !== undefined ? { endingSummary: input.endingSummary } : {}),
+      },
+    },
+    state: { ...book.state, foreshadowing },
+  };
+  const updated: BookProject = {
+    ...changed,
+    restructureLog: [
+      ...(book.restructureLog ?? []),
+      {
+        at: new Date().toISOString(),
+        kind: 'retarget' as const,
+        before,
+        after: snapshotOf(changed),
+        note: input.note,
+      },
+    ],
+  };
+  return saveBook(updated);
+}
+
+export function restoreRestructure(bookId: string, logIndex: number): BookProject {
+  const book = getBook(bookId);
+  if (!book) throw new Error('未找到指定小说工程');
+  const entry = (book.restructureLog ?? [])[logIndex];
+  if (!entry) throw new Error('找不到对应的调整卷纲快照');
+  const target = entry.before;
+  if (target.targetChapters != null) {
+    const tol = effectiveTolerance(target.targetChapters, target.tolerance);
+    const maxCommitted = maxCommittedMainChapter(book);
+    if (target.targetChapters + tol < maxCommitted) {
+      throw new Error(
+        `该快照的目标 ${target.targetChapters} 章（±${tol}）小于当前已提交的最大主线章号 ${maxCommitted}，无法恢复（已写章节无法收回）。`
+      );
+    }
+  }
+  const before = snapshotOf(book);
+  const threadMap = new Map(target.threads.map((t) => [t.id, t]));
+  const foreshadowing = book.state.foreshadowing.map((f) => {
+    const snap = threadMap.get(f.id);
+    if (!snap) return f;
+    return { ...f, payoffDue: snap.payoffDue, status: snap.status };
+  });
+  const updated: BookProject = {
+    ...book,
+    outline: {
+      ...book.outline,
+      compass: {
+        ...book.outline.compass,
+        targetChapters: target.targetChapters,
+        tolerance: target.tolerance,
+        plannedEnding: target.plannedEnding,
+        endingSummary: target.endingSummary,
+      },
+    },
+    state: { ...book.state, foreshadowing },
+    restructureLog: [
+      ...(book.restructureLog ?? []),
+      {
+        at: new Date().toISOString(),
+        kind: 'restore' as const,
+        before,
+        after: target,
+        note: `恢复 ${entry.at} 的调整快照`,
+      },
+    ],
+  };
+  return saveBook(updated);
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check a book project's continuity state files (v2.0.0).
+"""Check a book project's continuity state files (v2.1.0).
 Stdlib only. Usage: python3 scripts/check_continuity.py <book_dir>
 
 Blocking checks (exit 1 on any failure):
@@ -9,6 +9,9 @@ Blocking checks (exit 1 on any failure):
   - no `open` or un-rescheduled `deferred` thread is past its payoff_due chapter
     (stale = FAIL; due within the next 3 chapters = warning). Open threads unpaid
     after 30 chapters are always FAIL (the 30-chapter flag rule).
+    `archived` threads are exempt from the stale, 30-chapter and end-window rules.
+  - a thread's payoff_due past the book's end window (T + effective tolerance)
+    is FAIL (manual §六.3; only when the book sets a target; paid/archived exempt)
   - state/knows.md exists and lists every character named in bible/characters.md
   - every character named in a chapter contract appears in bible/characters.md
     and is NOT a nameless placeholder (e.g. 黑衣人, 神秘人, 路人, 店小二, stranger)
@@ -17,10 +20,16 @@ Blocking checks (exit 1 on any failure):
 Warnings:
   - ledger thread with no payoff_due
   - chapter >= 2 with <= 1 named character (cast-thin / solo monologue risk)
+  - a thread planted in the latest chapter with payoff_due past T-5 (T >= 20)
+  - unclosed series/volume threads within 15 chapters of the end window
+    (short books: max(2, round_half_up(0.2T))) — warning only, never blocking
 """
 import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from phase import effective_tolerance, near_end_warning_threshold  # noqa: E402
 
 PLACEHOLDER_NAMES = {
     "黑衣人", "神秘人", "陌生人", "路人", "过路人", "行人", "群众", "围观者",
@@ -44,13 +53,36 @@ def parse_ledger(text):
                      r"\s*\|\s*status:\s*(\w+)", line)
         if m:
             target_m = re.search(r"target_chapter:\s*(\d+)", line)
+            scope_m = re.search(r"scope:\s*(series|volume|episode)", line)
+            kind_m = re.search(r"kind:\s*(reveal|conflict|relationship|other)", line)
+            thread_m = re.search(r"thread:\s*(.+?)\s*$", line)
             threads[m.group(1)] = {
                 "planted": int(m.group(2)),
                 "payoff_due": int(m.group(3)) if m.group(3) and m.group(3).isdigit() else None,
                 "status": m.group(4),
                 "target_chapter": int(target_m.group(1)) if target_m else None,
+                "scope": scope_m.group(1) if scope_m else "series",
+                "kind": kind_m.group(1) if kind_m else "other",
+                "thread": thread_m.group(1) if thread_m else "",
             }
     return threads
+
+
+def parse_compass(book):
+    """Read Target chapters / Tolerance / Target words from outline/overview.md.
+    Missing keys -> None (old book, legacy fallback)."""
+    text = ""
+    path = os.path.join(book, "outline", "overview.md")
+    if os.path.exists(path):
+        text = open(path, encoding="utf-8").read()
+    def _int(key):
+        m = re.search(rf"^- {key}:\s*(\d+)\s*$", text, re.M)
+        return int(m.group(1)) if m else None
+    return {
+        "target_chapters": _int("Target chapters"),
+        "tolerance": _int("Tolerance"),
+        "target_words": _int("Target words"),
+    }
 
 
 def chapter_fields(text):
@@ -73,7 +105,12 @@ def check_book(book):
     ledger = parse_ledger(read(ledger_path))
     if not ledger:
         failures.append("state/foreshadowing.md: no parseable threads "
-                        "(want `- F01 | planted: N | payoff_due: N | status: open|progressing|paid|deferred`)")
+                        "(want `- F01 | planted: N | payoff_due: N | status: open|progressing|paid|deferred|archived`)")
+    compass = parse_compass(book)
+    target = compass["target_chapters"]
+    win_end = None
+    if target is not None:
+        win_end = target + effective_tolerance(target, compass["tolerance"])
     knows = read(os.path.join(state, "knows.md"))
     if not knows.strip():
         failures.append("missing/empty state/knows.md")
@@ -114,6 +151,18 @@ def check_book(book):
         if due is None:
             warnings.append(f"{tid}: no payoff_due set (every thread needs a payoff date)")
             continue
+        # 终局收敛审计（手册 §六.3）：payoff_due 超出完结窗口 T+tol 即阻断
+        # （仅 T 非空、未 paid/archived 的线；episode 单集线也算——它仍占一个兑现期）。
+        if (
+            win_end is not None
+            and t["status"] not in ("paid", "archived")
+            and due > win_end
+        ):
+            failures.append(
+                f"{tid}: payoff_due chapter {due} is past the end window "
+                f"(target {target} ± {effective_tolerance(target, compass['tolerance'])}, "
+                f"latest {win_end}) — compress it into the window or archive it"
+            )
         if t["status"] in ("open", "progressing", "deferred"):
             effective_due = max(due, t["target_chapter"] or 0)
             if max_ch >= effective_due:
@@ -124,6 +173,34 @@ def check_book(book):
             if t["status"] == "open" and max_ch - t["planted"] >= 30:
                 failures.append(f"{tid}: open for >=30 chapters since planted "
                                 f"(chapter {t['planted']}) — 30-chapter flag")
+            # 新埋伏笔不晚于 T-5（仅 T >= 20）：以最新章埋设的线为准，警告。
+            if (
+                target is not None
+                and target >= 20
+                and t["planted"] == max_ch
+                and due > target - 5
+            ):
+                warnings.append(
+                    f"{tid}: planted in chapter {max_ch} but payoff_due {due} is past "
+                    f"T-5 ({target - 5}) — late plant, pull the payoff forward"
+                )
+    # 收官预警（手册 §六.3）：距终点 ≤ 阈值仍有未结主线伏笔 → 警告，永不阻断。
+    # episode 单集线不计入主线收官预警；archived/paid 不算未结。
+    if win_end is not None:
+        threshold = near_end_warning_threshold(target, compass["target_words"])
+        if win_end - max_ch <= threshold:
+            unclosed = [
+                tid
+                for tid, t in ledger.items()
+                if t["status"] in ("open", "progressing", "deferred")
+                and t["scope"] in ("series", "volume")
+            ]
+            if unclosed:
+                warnings.append(
+                    f"near the end (chapter {max_ch}, window ends {win_end}): "
+                    f"{len(unclosed)} main thread(s) still unclosed: "
+                    f"{', '.join(sorted(unclosed))} — converge or archive them"
+                )
     progress = read(os.path.join(state, "progress.md"))
     committed = set(int(n) for n in re.findall(r"committed:\s*(\d+)", progress))
     present = set(int(f[:3]) for f in files)

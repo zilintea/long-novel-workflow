@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { buildSkillBundle } from './server/skillBundle.ts';
 import {
   applyAtomicChapterCommit,
+  applyRetarget,
   clearTrashOnDisk,
   deleteBook,
   deleteTrashOnDisk,
@@ -14,6 +15,7 @@ import {
   initBookStore,
   listBooks,
   listTrashOnDisk,
+  restoreRestructure,
   rollbackChapterCommit,
   saveBook,
   saveTrashOnDisk,
@@ -24,6 +26,7 @@ import {
   runAiSubReview,
   runBoundedRevise,
   runDraftContract,
+  runDraftEnding,
   runForgeCharacter,
   runGenerateBible,
   runImportManuscript,
@@ -32,7 +35,8 @@ import {
   runPrepareCommit,
   streamWriteChapter,
 } from './server/geminiService.ts';
-import type { BookProject, CommitProposal, TrashItem } from './src/shared/types.ts';
+import type { BookProject, CommitProposal, RetargetInput, TrashItem } from './src/shared/types.ts';
+import { buildSequelSeed, createBookFromSequelSeed, validateSequelSeed } from './src/shared/sequelSeed.ts';
 import { preserveLockedCharacters } from './src/shared/characterUtils.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -49,7 +53,7 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '10mb' }));
 
-  // Pre-build complete v2.0.0 skill + mcp-server workbench bundle if skill-repo is present
+  // Pre-build complete v2.1.0 skill + mcp-server workbench bundle if skill-repo is present
   if (fs.existsSync(path.join(__dirname, 'skill-repo'))) {
     try {
       const info = buildSkillBundle(__dirname, true);
@@ -61,14 +65,14 @@ async function startServer() {
     }
   }
 
-  // --- Skill Repo v2.0.0 Full Package Download ---
+  // --- Skill Repo v2.1.0 Full Package Download ---
   const sendZipBundle = (_req: express.Request, res: express.Response) => {
     try {
       const info = buildSkillBundle(__dirname, false);
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Content-Length', String(info.zipSize));
       res.setHeader('Content-Type', 'application/zip');
-      res.download(info.zipPath, 'long-novel-workflow-v2.0.0.zip');
+      res.download(info.zipPath, 'long-novel-workflow-v2.1.0.zip');
     } catch (err) {
       res.status(500).json({ error: getErrMessage(err) });
     }
@@ -80,14 +84,14 @@ async function startServer() {
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Content-Length', String(info.tarGzSize));
       res.setHeader('Content-Type', 'application/octet-stream');
-      res.download(info.tarGzPath, 'long-novel-workflow-v2.0.0.tar.gz');
+      res.download(info.tarGzPath, 'long-novel-workflow-v2.1.0.tar.gz');
     } catch (err) {
       res.status(500).json({ error: getErrMessage(err) });
     }
   };
 
-  app.get('/downloads/long-novel-workflow-v2.0.0.zip', sendZipBundle);
-  app.get('/downloads/long-novel-workflow-v2.0.0.tar.gz', sendTarGzBundle);
+  app.get('/downloads/long-novel-workflow-v2.1.0.zip', sendZipBundle);
+  app.get('/downloads/long-novel-workflow-v2.1.0.tar.gz', sendTarGzBundle);
   app.get('/api/skill-repo/bundle', sendZipBundle);
 
   // --- Book Persistence API ---
@@ -220,6 +224,20 @@ async function startServer() {
         res.status(404).json({ error: '未找到指定小说工程' });
         return;
       }
+      // 乐观锁：提交时携带启动时的 outlineRevision，期间改过卷纲则拒绝，
+      // 迟到的提交不覆盖新设定（手册 §十一.1）。仅对已存盘的书校验。
+      const stored = getBook(req.params.id);
+      const expected = req.body.expectedOutlineRevision;
+      if (
+        stored &&
+        expected != null &&
+        (stored.outlineRevision ?? 1) !== Number(expected)
+      ) {
+        res.status(409).json({
+          error: `大纲已在提交期间被修改（当前 outlineRevision=${stored.outlineRevision ?? 1}，提交时为 ${expected}），本次提交已丢弃，请用最新大纲重新生成。`,
+        });
+        return;
+      }
       const proposal = req.body.proposal as CommitProposal;
       if (!proposal || !proposal.chapter) {
         res.status(400).json({ error: '缺少原子提交提案数据' });
@@ -229,6 +247,67 @@ async function startServer() {
       res.json({ book: updated });
     } catch (err) {
       res.status(500).json({ error: getErrMessage(err) });
+    }
+  });
+
+  app.post('/api/books/:id/retarget', (req, res) => {
+    try {
+      const input = req.body as RetargetInput;
+      if (!input || !Number.isFinite(Number(input.targetChapters))) {
+        res.status(400).json({ error: '请提供有效的新目标章数' });
+        return;
+      }
+      const updated = applyRetarget(req.params.id, input);
+      res.json({ book: updated });
+    } catch (err) {
+      res.status(400).json({ error: getErrMessage(err) });
+    }
+  });
+
+  app.post('/api/books/:id/restructure-restore', (req, res) => {
+    try {
+      const logIndex = Number(req.body.logIndex);
+      if (!Number.isInteger(logIndex) || logIndex < 0) {
+        res.status(400).json({ error: '请提供有效的快照序号' });
+        return;
+      }
+      const updated = restoreRestructure(req.params.id, logIndex);
+      res.json({ book: updated });
+    } catch (err) {
+      res.status(400).json({ error: getErrMessage(err) });
+    }
+  });
+
+  app.get('/api/books/:id/sequel-seed', (req, res) => {
+    try {
+      const book = getBook(req.params.id);
+      if (!book) {
+        res.status(404).json({ error: '未找到指定小说工程' });
+        return;
+      }
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${book.id}-sequel-seed.json"`
+      );
+      res.json(buildSequelSeed(book));
+    } catch (err) {
+      res.status(500).json({ error: getErrMessage(err) });
+    }
+  });
+
+  app.post('/api/books/import-seed', (req, res) => {
+    try {
+      const checked = validateSequelSeed(req.body.seed);
+      if (!checked.ok) {
+        res.status(400).json({ error: checked.error });
+        return;
+      }
+      const title = typeof req.body.title === 'string' ? req.body.title : '';
+      const book = createBookFromSequelSeed(checked.seed, title);
+      const saved = saveBook(book);
+      res.json({ book: saved });
+    } catch (err) {
+      res.status(400).json({ error: getErrMessage(err) });
     }
   });
 
@@ -353,6 +432,14 @@ async function startServer() {
 
   app.post('/api/ai/auto-chapter-bundle', async (req, res) => {
     try {
+      // 省配额单次合并路径：仅当用户显式勾选「省配额单次合并请求」时才放行；
+      // 默认走两步隔离（起草合同 → 盲写正文），本接口拒绝默认调用。
+      if (req.body.singleRequest !== true) {
+        res.status(400).json({
+          error: '默认采用两步隔离（先起草合同，再盲写正文），单次合并仅在设置中显式开启「省配额单次合并请求」后可用。',
+        });
+        return;
+      }
       const { book, chapterNum, existingContract, authorGuidance } = req.body;
       const result = await runAutoChapterBundle(
         book,
@@ -360,6 +447,16 @@ async function startServer() {
         existingContract,
         authorGuidance
       );
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: getErrMessage(err) });
+    }
+  });
+
+  app.post('/api/ai/draft-ending', async (req, res) => {
+    try {
+      const { book } = req.body;
+      const result = await runDraftEnding(book);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: getErrMessage(err) });

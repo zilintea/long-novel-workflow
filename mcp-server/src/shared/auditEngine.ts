@@ -1,5 +1,34 @@
 import type { AuditIssue, AuditReport, BookProject, ChapterItem } from './types.ts';
 import { DEFAULT_SLOP_LIST, DESIRE_SPECS, LANGUAGE_SPECS } from './skillSpecs.ts';
+import {
+  bigCadenceFor,
+  effectiveTolerance,
+  isShortWordMode,
+  nearEndWarningThreshold,
+} from './phase.ts';
+
+// v2 规则：无名占位角色名（与 skill 提示词层的 GENERIC_PLACEHOLDER_NAME_RE 同源）。
+// 确定性审计在此处阻断：合同出场人物不得使用黑衣人/神秘人/路人/店小二/stranger 等无名代称。
+const GENERIC_PLACEHOLDER_NAME_RE =
+  /^(黑衣人|神秘人|陌生人|路人|过路人|行人|群众|围观者|侍卫|护卫|士兵|家丁|管家|掌柜|店小二|小二|老板|老者|老头|老妇|少女|少年|男子|女子|男人|女人|杀手|刺客|打手|保镖|医生|大夫|护士|秘书|助理|司机|主角|反派|男主|女主|配角|龙套|甲|乙|丙|丁|某人|无名|unknown|stranger|guard|assassin|passerby|protagonist|waiter|doctor)[0-9一二三四五六七八九十甲乙丙丁]*$/i;
+
+export function isPlaceholderCharacterName(rawName: string): boolean {
+  const clean = rawName.trim();
+  if (!clean) return true;
+  if (GENERIC_PLACEHOLDER_NAME_RE.test(clean)) return true;
+  if (/^(某|第[一二三四五六七八九十\d]+号|未知)/.test(clean)) return true;
+  return false;
+}
+
+// v2 规则：章节标题须带规范前缀「第N章」/「Chapter N」（check_chapter.py 同款）。
+function hasCanonicalChapterTitlePrefix(title: string, num: number): boolean {
+  const clean = title.trim();
+  if (!clean) return false;
+  return (
+    new RegExp(`^第\\s*${num}\\s*章`).test(clean) ||
+    new RegExp(`^Chapter\\s*${num}\\b`, 'i').test(clean)
+  );
+}
 
 export function countProseSize(prose: string, language: 'zh' | 'en'): number {
   const trimmed = prose.trim();
@@ -8,6 +37,52 @@ export function countProseSize(prose: string, language: 'zh' | 'en'): number {
     return trimmed.replace(/\s+/g, '').length;
   }
   return trimmed.split(/\s+/).filter(Boolean).length;
+}
+
+/**
+ * 单章正文字数下限（手册 §六.2）：中文长篇 2100 字（skillSpecs.zh.minSize），
+ * 短篇字数模式（targetWords 启用且 T <= 20）为 1500 字；英文沿用 langSpec.minSize。
+ */
+export function effectiveMinSize(book: BookProject): number {
+  const langSpec = LANGUAGE_SPECS[book.language];
+  if (
+    book.language === 'zh' &&
+    isShortWordMode(book.outline.compass.targetChapters, book.outline.compass.targetWords)
+  ) {
+    return 1500;
+  }
+  return langSpec.minSize;
+}
+
+// 跨章重复比对：本章长句（去空白与标点后 ≥ 12 字）逐字出现在前章原文中的占比。
+// 短句与通用语不计，避免误伤正常的一两句前情回调；换词改写不在此查，只由写章提示词层的
+// 防重写铁律约束（本检查只拦逐字/近逐字复述，即“重写前章”最常见的形态）。
+function repeatedSentenceRatio(
+  candidate: string,
+  reference: string
+): { ratio: number; sample: string } {
+  const strip = (s: string) =>
+    s.replace(/[\s，。、！？；：""''（）《》〈〉,.!?;:'"()[\]{}<>|/\\\-_~@#%^&*+=]/g, '');
+  const cand = candidate.trim();
+  const ref = strip(reference);
+  if (!cand || !ref) return { ratio: 0, sample: '' };
+  const sentences = cand
+    .split(/[。！？.!?\n]+/)
+    .map((s) => s.trim())
+    .filter((s) => strip(s).length >= 12);
+  if (sentences.length === 0) return { ratio: 0, sample: '' };
+  let dupChars = 0;
+  let totalChars = 0;
+  let sample = '';
+  for (const s of sentences) {
+    const n = strip(s);
+    totalChars += n.length;
+    if (n && ref.includes(n)) {
+      dupChars += n.length;
+      if (!sample) sample = s.length > 60 ? `${s.slice(0, 60)}……` : s;
+    }
+  }
+  return { ratio: totalChars === 0 ? 0 : dupChars / totalChars, sample };
 }
 
 export function runDeterministicAudit(
@@ -30,6 +105,14 @@ export function runDeterministicAudit(
       severity: 'blocking',
       source: 'deterministic',
       message: '章节合同缺少标题 (title)。',
+    });
+  } else if (!hasCanonicalChapterTitlePrefix(contract.title, num)) {
+    issues.push({
+      id: `contract-title-prefix-${num}`,
+      dimension: 'contract',
+      severity: 'warning',
+      source: 'deterministic',
+      message: `章节标题建议使用规范前缀「第 ${num} 章」/「Chapter ${num}」（当前标题：${contract.title.trim()}）。`,
     });
   }
 
@@ -92,6 +175,11 @@ export function runDeterministicAudit(
     });
   }
 
+  const chapterKind = contract.chapterKind ?? 'main';
+  const isMainChapter = chapterKind === 'main';
+  const targetChapters = book.outline.compass.targetChapters;
+  const isCommitted = chapterItem.status === 'committed';
+
   if (contract.payoffSize === 'auto') {
     if (prose.trim().length > 0) {
       issues.push({
@@ -102,25 +190,36 @@ export function runDeterministicAudit(
         message: '兑现级别当前为「AI 自动执行」，建议由 AI 自动定型为 small 或 big 后再提交。',
       });
     }
-  } else {
-    if (num % 3 === 0 && contract.payoffSize !== 'small' && contract.payoffSize !== 'big') {
+  } else if (isMainChapter) {
+    // 动态 bigCadence（手册 §六.1）：取消写死的 %10，改读 targetChapters。
+    // 已提交章按 bigCadenceSnapshot 核对（缩纲不溯及既往）；无快照的已提交老章豁免；
+    // 草稿章按当前动态 bigCadence。T < 30 跳过（bigCadence 为 null）。
+    const currentCadence = bigCadenceFor(targetChapters);
+    const effectiveCadence = isCommitted ? (contract.bigCadenceSnapshot ?? null) : currentCadence;
+    if (effectiveCadence != null && num % effectiveCadence === 0 && contract.payoffSize !== 'big') {
       issues.push({
-        id: `cadence-3-${num}`,
+        id: `cadence-big-${num}`,
         dimension: 'hook_desire',
         severity: 'blocking',
         source: 'deterministic',
-        message: `第 ${num} 章为 3 的倍数节点章，必须声明 payoff_size 为 small 或 big。`,
+        message: `第 ${num} 章为大节点章（bigCadence=${effectiveCadence}），payoff_size 必须为 big。`,
       });
     }
 
-    if (num % 10 === 0 && contract.payoffSize !== 'big') {
-      issues.push({
-        id: `cadence-10-${num}`,
-        dimension: 'hook_desire',
-        severity: 'blocking',
-        source: 'deterministic',
-        message: `第 ${num} 章为 10 的倍数大节点章，payoff_size 必须为 big。`,
-      });
+    // %3 强兑现：T < 10 或短篇模式（targetWords 启用）放宽；已提交章不溯及既往。
+    const relaxPercent3 =
+      (targetChapters != null && targetChapters < 10) ||
+      book.outline.compass.targetWords != null;
+    if (!relaxPercent3 && !isCommitted) {
+      if (num % 3 === 0 && contract.payoffSize !== 'small' && contract.payoffSize !== 'big') {
+        issues.push({
+          id: `cadence-3-${num}`,
+          dimension: 'hook_desire',
+          severity: 'blocking',
+          source: 'deterministic',
+          message: `第 ${num} 章为 3 的倍数节点章，必须声明 payoff_size 为 small 或 big。`,
+        });
+      }
     }
   }
 
@@ -149,8 +248,9 @@ export function runDeterministicAudit(
       source: 'deterministic',
       message: '正文为空，尚无任何段落内容。',
     });
-  } else {
-    const minLimit = contract.isProbe ? langSpec.probeMinSize : langSpec.minSize;
+  } else if (isMainChapter) {
+    // 后记/番外豁免字数上下限检查（空正文仍在上面阻断）。
+    const minLimit = contract.isProbe ? langSpec.probeMinSize : effectiveMinSize(book);
     if (proseSize < langSpec.probeMinSize) {
       issues.push({
         id: `length-too-short-${num}`,
@@ -218,6 +318,15 @@ export function runDeterministicAudit(
         message: `合同出场人物「${charName}」未登记在故事圣经 (bible/characters) 中。`,
       });
     }
+    if (charName.trim() && isPlaceholderCharacterName(charName)) {
+      issues.push({
+        id: `canon-placeholder-char-${charName}-${num}`,
+        dimension: 'character_voice',
+        severity: 'blocking',
+        source: 'deterministic',
+        message: `合同出场人物「${charName}」是无名占位代称（黑衣人/神秘人/路人/店小二/stranger 等），必须锻造具体姓名与动机后登记入圣经。`,
+      });
+    }
   }
 
   const ledgerMap = new Map(book.state.foreshadowing.map((f) => [f.id.trim(), f]));
@@ -266,7 +375,9 @@ export function runDeterministicAudit(
   const contractMentionText = `${contract.title} ${contract.mustHappen} ${contract.desirePayoff} ${contract.hook}`;
 
   // Check overdue or >= 30 chapter stale open/progressing threads
-  for (const thread of book.state.foreshadowing) {
+  // （后记/番外不参与主线伏笔 pacing 检查；archived 线天然不在 open/progressing 之列。）
+  const pacingThreads = isMainChapter ? book.state.foreshadowing : [];
+  for (const thread of pacingThreads) {
     if (thread.status === 'open' || thread.status === 'progressing') {
       const addressedInContract =
         paidSet.has(thread.id.trim()) ||
@@ -310,6 +421,105 @@ export function runDeterministicAudit(
           message: `伏笔 ${thread.id} 自第 ${thread.planted} 章埋下已悬空 >= 30 章，必须在本章兑现处理或在台账中顺延/延期（deferred）。`,
         });
       }
+    }
+  }
+
+  // 6. 终局收敛审计（手册 §六.3）：仅 main 章、targetChapters 非空时检查。
+  if (isMainChapter && targetChapters != null) {
+    const tol = effectiveTolerance(targetChapters, book.outline.compass.tolerance);
+    // (a) 非 paid/archived 伏笔的 payoffDue 超出完结窗口 → 阻断。
+    for (const thread of book.state.foreshadowing) {
+      if (thread.status === 'paid' || thread.status === 'archived') continue;
+      if (thread.payoffDue > targetChapters + tol) {
+        issues.push({
+          id: `foreshadow-payoff-beyond-end-${thread.id}`,
+          dimension: 'foreshadowing',
+          severity: 'blocking',
+          source: 'deterministic',
+          message: `伏笔 ${thread.id}（${thread.thread}）约定第 ${thread.payoffDue} 章兑现，已超出全书完结窗口（目标 ${targetChapters} 章 ±${tol}，最晚第 ${targetChapters + tol} 章），请在台账中压缩兑现期、并线或归档。`,
+        });
+      }
+    }
+    // (b) 本章新埋伏笔 payoffDue > T-5 → 警告（仅 T>=20；以台账 planted 章为准）。
+    if (targetChapters >= 20) {
+      for (const thread of book.state.foreshadowing) {
+        if (
+          thread.planted === num &&
+          (thread.status === 'open' || thread.status === 'progressing') &&
+          thread.payoffDue > targetChapters - 5
+        ) {
+          issues.push({
+            id: `foreshadow-late-plant-${thread.id}`,
+            dimension: 'foreshadowing',
+            severity: 'warning',
+            source: 'deterministic',
+            message: `本章新埋伏笔 ${thread.id} 约定第 ${thread.payoffDue} 章兑现，晚于建议的最晚新埋线（第 ${targetChapters - 5} 章），临近完结还在开长线新坑，建议提前兑现或改短线。`,
+          });
+        }
+      }
+    }
+    // (c) 距终点 <= 阈值时仍有未结主线/卷级伏笔 → 警告（永不阻断）。
+    const nearThreshold = nearEndWarningThreshold(
+      targetChapters,
+      book.outline.compass.targetWords
+    );
+    if (targetChapters - num <= nearThreshold) {
+      const unclosed = book.state.foreshadowing.filter(
+        (f) =>
+          (f.status === 'open' || f.status === 'progressing') &&
+          (f.scope ?? 'series') !== 'episode'
+      );
+      if (unclosed.length > 0) {
+        issues.push({
+          id: 'foreshadow-unclosed-near-end',
+          dimension: 'foreshadowing',
+          severity: 'warning',
+          source: 'deterministic',
+          message: `距目标完结（第 ${targetChapters} 章）仅剩 ${targetChapters - num} 章，仍有 ${unclosed.length} 条未结主线/卷级伏笔（${unclosed
+            .slice(0, 5)
+            .map((f) => f.id)
+            .join('、')}${unclosed.length > 5 ? '…' : ''}），建议收拢、并线或归档，勿留到终章。`,
+        });
+      }
+    }
+  }
+
+  // 5. 跨章重复：本章正文不得大段复述前后章（防“重写前章”与“抢写后章”）。
+  //    比最近两章 + 后一章（重生成中间章节时，后章已写定，新章抢写后章内容同样是脱节）；
+  //    ≥ 15% 长句逐字重复即阻断，8%–15% 只警告（可能只是一段较长的前情回调）。
+  const compareChapters = book.chapters
+    .filter(
+      (c) => (c.chapter < num && c.chapter >= num - 2) || c.chapter === num + 1
+    )
+    .sort((a, b) => a.chapter - b.chapter);
+  for (const other of compareChapters) {
+    const { ratio, sample } = repeatedSentenceRatio(prose, other.prose);
+    const isNext = other.chapter > num;
+    if (ratio >= 0.15) {
+      issues.push({
+        id: `canon-repeat-prev-${num}`,
+        dimension: 'canon',
+        severity: 'blocking',
+        source: 'deterministic',
+        message: isNext
+          ? `第 ${num} 章与后一章第 ${other.chapter} 章内容大量重复（约 ${Math.round(ratio * 100)}% 的长句逐字出现在后章），新写的本章抢写了后章已经写定的内容，请重新生成本章，不要提交。`
+          : `第 ${num} 章与第 ${other.chapter} 章内容大量重复（约 ${Math.round(ratio * 100)}% 的长句逐字出现在前章），疑似重写前章而非续写新剧情，请重新生成本章，不要提交。`,
+        citation: sample ? `重复句示例：${sample}` : undefined,
+      });
+      break;
+    }
+    if (ratio >= 0.08) {
+      issues.push({
+        id: `canon-repeat-prev-${num}`,
+        dimension: 'canon',
+        severity: 'warning',
+        source: 'deterministic',
+        message: isNext
+          ? `第 ${num} 章与后一章第 ${other.chapter} 章有部分句子重复（约 ${Math.round(ratio * 100)}%），请检查是否抢写了后章内容。`
+          : `第 ${num} 章与第 ${other.chapter} 章有部分句子重复（约 ${Math.round(ratio * 100)}%），请检查是否在复述前章内容。`,
+        citation: sample ? `重复句示例：${sample}` : undefined,
+      });
+      break;
     }
   }
 

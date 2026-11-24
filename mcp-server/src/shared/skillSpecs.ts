@@ -119,7 +119,7 @@ export const LANGUAGE_SPECS: Record<'zh' | 'en', LanguageSpec> = {
   zh: {
     code: 'zh',
     name: '中文 (Chinese)',
-    minSize: 2000,
+    minSize: 2100,
     maxSize: 4000,
     probeMinSize: 800,
     unit: 'chars',
@@ -313,6 +313,8 @@ export function createSampleEchoesBook(): BookProject {
     formula: 'rebirth-revenge + identity-suspense + strong-relationship',
     gate1Approved: true,
     gate2Approved: true,
+    bookStatus: 'ongoing',
+    outlineRevision: 1,
     marketScan: {
       platform: '番茄小说 (Fanqie)',
       genreId: 'fanqie_rebirth_revenge',
@@ -402,6 +404,7 @@ export function createSampleEchoesBook(): BookProject {
         scaleEstimate: '样书探针 3 章，完整连载规划 120–180 章',
         centralQuestion: '当年那封匿名信到底是谁写的？',
         whatBookIsNot: '不是单纯的打脸爽文——复仇是入口，真相才是出口。',
+        targetChapters: 150,
       },
       currentArc: {
         rangeLabel: '第 1–30 章（当前样书 1–3 章）',

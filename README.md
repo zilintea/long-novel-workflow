@@ -16,7 +16,7 @@ the characters, or the foreshadowing — in Chinese or English.
   per-character `knows` lists, hard-constraints-first prompting, and a blocking
   hook + desire audit per chapter. Only the wrong segment is redone, and a
   revision rolls its committed state back first.
-- **Current version:** v2.0.0 (2026-11-15). MIT license.
+- **Current version:** v2.1.0 (2026-11-16). MIT license.
 
 > 中文版：[`README.zh-CN.md`](README.zh-CN.md)
 
@@ -59,23 +59,23 @@ manual contract forms). Every chapter still passes the blocking audit before can
 
 ---
 
-## Defaults (v2.0.0)
+## Defaults (v2.1.0)
 
 | Item | Default |
 |---|---|
 | Language | Chinese first; English is phase 2 (`data/languages/zh.yaml`, `en.yaml`) |
-| Length | 120–180 chapter serial (unbounded long-form); 1–3 chapter short-story probe |
-| Chapter length | zh 2000–4000 characters (hard range 800–4000); en 1500–2500 words |
+| Length | Target chapters, default 100 (presets 50/80/100/150/250/custom, or blank for open-ended); 1–3 chapter short-story probe, or a target-words goal |
+| Chapter length | zh 2100–4000 characters (probe floor 800; short-word mode 1500); en 1500–2500 words (probe floor 600) |
 | Pilot formula | Rebirth-revenge + identity-suspense + strong-relationship (title/names after market scan) |
 | Primary platform | zh: Fanqie / Qimao; en: Royal Road (see `docs/TRAFFIC.md`) |
-| Desire payoff | Every chapter pays off ≥1 of **8 desires** (`auto` supported); `payoff_size` defaults to `auto` (AI executes small ~3 / big ~10) |
-| Cast & Continuity | Anti-nameless-NPC check, dynamic character registration, `open\|progressing\|paid\|deferred` foreshadowing, `第N章` title prefix |
+| Desire payoff | Every chapter pays off ≥1 of **8 desires** (`auto` supported); `payoff_size` defaults to `auto` (AI executes small ~3 / big at the dynamic big cadence) |
+| Cast & Continuity | Anti-nameless-NPC check, dynamic character registration, `open\|progressing\|paid\|deferred\|archived` foreshadowing, `第N章` title prefix |
 
 The 8 desires: curiosity, identification-upgrade, revenge-compensation,
 being-loved, escape-comfort, survival-breakout, power-scheme, bond-resonance.
 See `docs/HOOKS_AND_DESIRE.md`.
 
-## Launch skills (5, v2.0.0)
+## Launch skills (5, v2.0.0 launch set)
 
 1. Market scan / deconstruction — what is actually being read, and why.
 2. Packaging — title, cover brief, blurb, keywords.

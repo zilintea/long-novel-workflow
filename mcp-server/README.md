@@ -237,7 +237,7 @@ says so.
   notes, not failures: the chapter not yet in `progress.md`, a thread it
   pays still showing `open`, a thread it plants still missing from the
   ledger.
-- **Version:** the server & studio workbench are **v2.0.0**, matching skill v2.0.0 (8 desires + `auto`, 4000-char zh cap, dynamic cast growth, full-auto chapter loop, and recycle bin).
+- **Version:** the server & studio workbench are **v2.4.0**, matching skill v2.4.0 (user-driven mode: submitUserOutline / validateSubmission / checkFidelity / checkContract / getSubmissionLevel tools, per-beat word budgets, submission completeness levels L0–L4; the audit/commit path also runs check_contract.py + check_fidelity.py, which skip gracefully on books without contracts or submissions).
 
 ## Web Workbench (Long Novel Studio)
 

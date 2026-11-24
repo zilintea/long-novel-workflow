@@ -21,6 +21,30 @@ import {
   GENRE_PACKS,
   LANGUAGE_SPECS,
 } from '../src/shared/skillSpecs.ts';
+import { bigCadenceFor, effectiveTolerance, getPhaseInfo } from '../src/shared/phase.ts';
+
+// 终局规划辅助（手册 §四、§六）：合同起草用的动态大节奏规则 + 罗盘目标摘要。
+function cadenceRule(book: BookProject, chapterNum: number): string {
+  const target = book.outline.compass.targetChapters;
+  const cadence = bigCadenceFor(target);
+  if (cadence == null) {
+    return target == null
+      ? `本书未设目标章数（老书退化）：沿用旧规则，第 ${chapterNum} 章是 10 的倍数卷节点时 payoffSize 必须为 "big"。`
+      : `本书目标 ${target} 章（短篇/中篇分支）：不设大兑现节点，payoffSize 按 3 章小节奏自主选择 small。`;
+  }
+  return `本书目标 ${target} 章，动态大节奏 bigCadence=${cadence}：第 ${chapterNum} 章${
+    chapterNum % cadence === 0 ? `是 ${cadence} 的倍数大节点，payoffSize 必须为 "big"` : `不是大节点，按 3 章小节奏自主选择`
+  }。`;
+}
+
+function targetSummaryLine(book: BookProject): string {
+  const c = book.outline.compass;
+  if (c.targetChapters == null) return '本书未设目标章数（自由连载）。';
+  const tol = effectiveTolerance(c.targetChapters, c.tolerance);
+  return `本书目标 ${c.targetChapters} 章（±${tol}，收官窗口 ${c.targetChapters - tol}–${c.targetChapters + tol} 章）${
+    c.targetWords != null ? `，短篇目标 ${c.targetWords} 字` : ''
+  }。`;
+}
 
 const ALL_DESIRE_KEYS_LIST = Object.keys(DESIRE_SPECS).join(' / ');
 const ALL_DESIRE_GUIDE = Object.values(DESIRE_SPECS)
@@ -472,12 +496,21 @@ function sanitizeCommitForeshadowing(
 
     const rawDue = Number((nf as any).payoffDue);
     const payoffDue = Number.isFinite(rawDue) && rawDue > chapterNum ? rawDue : chapterNum + 5;
+    // 提交提取时 AI 自动标定 scope/kind；缺失时默认 series/other。
+    const scope = ['series', 'volume', 'episode'].includes((nf as any).scope)
+      ? (nf as any).scope
+      : 'series';
+    const kind = ['reveal', 'conflict', 'relationship', 'other'].includes((nf as any).kind)
+      ? (nf as any).kind
+      : 'other';
     newForeshadowing.push({
       id: finalId,
       planted: chapterNum,
       payoffDue,
       status: 'open',
       thread: threadText,
+      scope,
+      kind,
     });
   }
 
@@ -547,6 +580,9 @@ export async function runGenerateBible(params: {
   language: 'zh' | 'en';
   marketScan?: MarketScanRecord;
   preferredNames?: string;
+  endingSummary?: string;
+  plannedEnding?: string;
+  targetChapters?: number;
 }): Promise<Pick<BookProject, 'title' | 'formula' | 'bible' | 'outline' | 'state'>> {
   const genre = GENRE_PACKS.find((g) => g.id === params.genreId);
 
@@ -567,6 +603,15 @@ export async function runGenerateBible(params: {
       `3. cultureAnchors 必须具体到衣食住行器物色调，不可写空泛大词。`,
       `4. roadmap 先规划前 10 章（包含开篇黄金三章与第 4-10 章大节点铺垫），desire 只能取 ${ALL_DESIRE_KEYS_LIST} 之一，每章 hook 必须不少于 15 字。`,
       `5. initialKnows 列出第 1 章前各角色已知/明确不知的核心边界；initialForeshadowing 列出 F01-F03 并标注预期兑现章号 payoffDue。`,
+      params.targetChapters != null
+        ? `6. 终局规划：本书目标 ${params.targetChapters} 章（浮动 ±${effectiveTolerance(params.targetChapters)}，不是死线）；罗盘 compass 须带上 targetChapters=${params.targetChapters}。`
+        : `6. 终局规划：本书目标章数暂不定，罗盘 compass 不填 targetChapters（自由连载，开写后再补）。`,
+      params.endingSummary
+        ? `7. 一句话核心结局（endingSummary，供合同与复盘把关，绝不进正文）：${params.endingSummary}`
+        : `7. 一句话核心结局暂不定，endingSummary 留空（立局期末再补）。`,
+      params.plannedEnding
+        ? `8. 完整终局蓝图（plannedEnding，3 落点：终局高潮、人物归宿、核心问题答案；导演专用，绝不进正文提示词）：${params.plannedEnding}`
+        : `8. 完整终局蓝图暂不定，plannedEnding 留空。`,
     ].join('\n\n'),
     config: {
       systemInstruction:
@@ -659,6 +704,9 @@ export async function runGenerateBible(params: {
                   scaleEstimate: { type: Type.STRING },
                   centralQuestion: { type: Type.STRING },
                   whatBookIsNot: { type: Type.STRING },
+                  targetChapters: { type: Type.INTEGER },
+                  endingSummary: { type: Type.STRING },
+                  plannedEnding: { type: Type.STRING },
                 },
                 required: ['endDirection', 'activeLongThreads', 'scaleEstimate', 'centralQuestion', 'whatBookIsNot'],
               },
@@ -778,6 +826,45 @@ export async function runGenerateBible(params: {
       timeline: [],
     },
   };
+}
+
+export async function runDraftEnding(book: BookProject): Promise<{
+  endingSummary: string;
+  plannedEnding: string;
+}> {
+  const response = await callGenerateContent(
+    {
+      contents: [
+        `为《${book.title}》拟定结局草案（只出结局，不写正文）。`,
+        `核心前提：${book.bible.premise}`,
+        `终局方向：${book.outline.compass.endDirection}`,
+        `核心悬念：${book.outline.compass.centralQuestion}`,
+        `目标：${targetSummaryLine(book)}`,
+        `已提交摘要：\n${book.state.summaries.map((s) => `Ch${s.chapter}: ${s.summary}`).join('\n') || '无'}`,
+        `未结伏笔：\n${book.state.foreshadowing
+          .filter((f) => f.status === 'open' || f.status === 'progressing')
+          .map((f) => `${f.id} [${f.scope ?? 'series'}/${f.kind ?? 'other'}] due:${f.payoffDue}: ${f.thread}`)
+          .join('\n') || '无'}`,
+        `要求：只输出两项——(1) endingSummary：一句话核心结局；(2) plannedEnding：完整终局蓝图 3 落点（终局高潮、人物归宿、核心问题答案），每落点一句话。结局必须能收束上方未结伏笔，不得另开与前提冲突的新线。`,
+      ].join('\n\n'),
+      config: {
+        systemInstruction:
+          '你是 long-novel-workflow 的终局设计师。只拟定结局草案，不写正文、不编新主线；结局是作者可改的草案，不是定稿。',
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            endingSummary: { type: Type.STRING },
+            plannedEnding: { type: Type.STRING },
+          },
+          required: ['endingSummary', 'plannedEnding'],
+        },
+      },
+    },
+    true
+  );
+
+  return parseJsonSafe(response.text, '结局草案生成失败');
 }
 
 export async function runForgeCharacter(book: BookProject, promptHint: string): Promise<{
@@ -925,6 +1012,24 @@ export async function runDraftContract(
   const roadmapItem = book.outline.roadmap.find((r) => r.chapter === chapterNum);
   const foreshadowCtx = buildForeshadowingPromptContext(book, chapterNum);
   const castRosterCtx = buildCastRosterPromptContext(book, chapterNum);
+  // 剧透隔离（手册 §四）：起草合同可看一句话结局方向 + 阶段信息，绝不看完整终局蓝图；
+  // 正文写作只拿合同 + 单行阶段指令。本函数不读取 plannedEnding。
+  const chapterKind: 'main' | 'epilogue' | 'extra' =
+    (existingContract?.chapterKind ?? 'main') as 'main' | 'epilogue' | 'extra';
+  const phaseInfo =
+    chapterKind === 'main'
+      ? getPhaseInfo(
+          chapterNum,
+          1,
+          book.outline.compass.targetChapters,
+          book.outline.compass.tolerance
+        )
+      : null;
+  const cadence = bigCadenceFor(book.outline.compass.targetChapters);
+  // %3 强兑现：T < 10 或短篇模式（targetWords 启用）放宽（与审计引擎一致）。
+  const relax3 =
+    (book.outline.compass.targetChapters != null && book.outline.compass.targetChapters < 10) ||
+    book.outline.compass.targetWords != null;
 
   const manualDesire: DesireKey | null =
     existingContract?.desire &&
@@ -943,11 +1048,11 @@ export async function runDraftContract(
     : `- desire 当前为「AI 自动判断选择 (auto)」，请结合上一章交接、大纲节奏与本章戏剧冲突，从以下 8 种核心读者欲望中自主择一最精准的类型：${ALL_DESIRE_GUIDE}。`;
 
   const payoffInstruction =
-    chapterNum % 10 === 0
-      ? `- 第 ${chapterNum} 章是 10 的倍数卷节点，payoffSize 必须为 "big"（阶段大高潮/大兑现，必须有重磅转折或重大破局交付）。`
+    chapterKind === 'main' && cadence != null && chapterNum % cadence === 0
+      ? `- 第 ${chapterNum} 章是大节点章（bigCadence=${cadence}），payoffSize 必须为 "big"（阶段大高潮/大兑现，必须有重磅转折或重大破局交付）。`
       : manualPayoff
       ? `- 作者已指定兑现级别为 "${manualPayoff}"，请严格按该量级策划本章情节点。`
-      : `- payoffSize 当前为「AI 自动判断并执行 (auto)」，请根据剧情蓄力曲线自主选择 "small"（稳步推进与小爽点/小反转）或 "big"（阶段高潮/重大翻盘/关键揭秘）${chapterNum % 3 === 0 ? '（本章为 3 的倍数节点，不可为 none）' : ''}，并在 desirePayoff 与 mustHappen 中落实对应强度的实体动作！`;
+      : `- payoffSize 当前为「AI 自动判断并执行 (auto)」，请根据剧情蓄力曲线自主选择 "small"（稳步推进与小爽点/小反转）或 "big"（阶段高潮/重大翻盘/关键揭秘）${!relax3 && chapterNum % 3 === 0 ? '（本章为 3 的倍数节点，不可为 none）' : ''}，并在 desirePayoff 与 mustHappen 中落实对应强度的实体动作！`;
 
   const response = await callGenerateContent(
     {
@@ -969,6 +1074,13 @@ export async function runDraftContract(
         `已知/未知关键信息：\n${book.state.knows.map((k) => `- ${k.characterName} ${k.knows ? '知道' : '不知道'}：${k.fact}`).join('\n')}`,
         buildNamingConstraint(book.language),
         authorNote ? `作者额外要求：${authorNote}` : '',
+        chapterKind !== 'main'
+          ? `本章为${chapterKind === 'epilogue' ? '后记' : '番外'}（chapterKind=${chapterKind}）：不计入主线进度，豁免阶段/节奏/大兑现检查，收束余韵、不开新主线冲突。`
+          : '',
+        book.outline.compass.endingSummary
+          ? `一句话核心结局（仅供合同把关方向，绝不写入正文、绝不提前泄底）：${book.outline.compass.endingSummary}`
+          : '',
+        phaseInfo ? `当前阶段：${phaseInfo.phaseLabelZh}。${phaseInfo.phaseMustNot}` : '',
         `规则检查：`,
         `- 章节标题 title 请自动带章号前缀（例如“第${chapterNum}章 ……”）。`,
         payoffInstruction,
@@ -1046,13 +1158,13 @@ export async function runDraftContract(
       : 'curiosity');
 
   const enforcedSize: PayoffSize =
-    chapterNum % 10 === 0
+    chapterKind === 'main' && cadence != null && chapterNum % cadence === 0
       ? 'big'
       : manualPayoff
       ? manualPayoff
       : data.payoffSize === 'big'
       ? 'big'
-      : data.payoffSize === 'none' && chapterNum % 3 !== 0
+      : data.payoffSize === 'none' && (!relax3 || chapterNum % 3 !== 0)
       ? 'none'
       : 'small';
 
@@ -1104,6 +1216,7 @@ export async function runDraftContract(
       foreshadowingPlanted: sanitizedForeshadowing.foreshadowingPlanted,
       foreshadowingPaid: sanitizedForeshadowing.foreshadowingPaid,
       isProbe: Boolean(existingContract?.isProbe),
+      chapterKind,
     },
     newCharacters: cleanNewChars,
   };
@@ -1125,6 +1238,22 @@ export async function* streamWriteChapter(
   const recentChapters = book.chapters
     .filter((c) => c.chapter < contract.chapter && c.chapter >= contract.chapter - 2)
     .sort((a, b) => a.chapter - b.chapter);
+
+  // 重生成中间章节时，后章已经写完定稿：新写的本章必须接到后章开头，不能只顾前章。
+  const nextChapter = book.chapters.find((c) => c.chapter === contract.chapter + 1);
+  const nextSummary = nextChapter
+    ? book.state.summaries.find((s) => s.chapter === nextChapter.chapter)?.summary || '（无摘要）'
+    : '';
+  const forwardBlock = nextChapter
+    ? [
+        `【后章衔接】本章不是最新章，后面已有第 ${nextChapter.chapter} 章《${nextChapter.contract.title}》写完并定稿，重写本章必须与它衔接：`,
+        `下一章开篇交接（它写明了如何承接本章）：${nextChapter.contract.transition}`,
+        `下一章必须发生：${nextChapter.contract.mustHappen}`,
+        `下一章摘要：${nextSummary}`,
+        `下一章正文开头（前 600 字，已定稿，不可改动）：\n${nextChapter.prose.slice(0, 600)}`,
+        `要求：本章结尾必须自然接到下一章开头——同一时间、同一地点、同一批人物、同一状态；不得改动下一章开头已经写定的人物、地点、对话与事实；不得让下一章的开篇失去前提；不得提前写掉下一章才发生的剧情。`,
+      ].join('\n')
+    : '';
 
   const presentChars = book.bible.characters.filter((c) =>
     contract.characters.includes(c.name)
@@ -1167,6 +1296,17 @@ export async function* streamWriteChapter(
       : contract.payoffSize === 'none'
       ? 'none（过渡蓄力：聚焦悬念铺垫与人物关系推演，仍需保证冲突感与明确钩子）'
       : 'small（稳步兑现：必须有明确的具体战果、线索突破、人情推进或当场反制，让读者有实感）';
+  // 盲写隔离（手册 §四）：正文只拿合同 + 单行阶段指令，绝不注入 plannedEnding /
+  // endingSummary。阶段指令由合同与当前章号推导。
+  const isMainChapter = (contract.chapterKind ?? 'main') === 'main';
+  const phaseInfo = isMainChapter
+    ? getPhaseInfo(
+        contract.chapter,
+        1,
+        book.outline.compass.targetChapters,
+        book.outline.compass.tolerance
+      )
+    : null;
 
   const prompt = [
     `请根据以下【章节合同】与【有限记忆切片】撰写《${book.title}》第 ${contract.chapter} 章：《${contract.title}》。`,
@@ -1180,6 +1320,7 @@ export async function* streamWriteChapter(
     `- 器物与环境锚点：衣着(${book.bible.cultureAnchors.clothing}) / 饮食(${book.bible.cultureAnchors.food}) / 器物(${book.bible.cultureAnchors.objects}) / 场景(${book.bible.cultureAnchors.landscape}) / 色调(${book.bible.cultureAnchors.colour})`,
     ``,
     `【三、本章合同（必须严格执行）】`,
+    phaseInfo ? phaseInfo.phaseLine : '',
     `- 核心欲望：${desireSpec ? `${desireSpec.labelZh}(${desireSpec.key})` : contract.desire} —— 本章必须兑现：${contract.desirePayoff}`,
     `- 兑现级别执行要求：${payoffExecutionHint}`,
     `- 必须发生（按序）：${contract.mustHappen}`,
@@ -1209,6 +1350,8 @@ export async function* streamWriteChapter(
     ...recentChapters.map(
       (c) => `\n--- 第 ${c.chapter} 章《${c.contract.title}》参考原文 ---\n${c.prose}`
     ),
+    `【防重写铁律】上面“参考原文”是已经写完的前章正文，只供你衔接剧情、保持人设与语调，绝不是让你重写的内容：本章必须从上一章结尾之后开始写（按 contract.transition 承接），只写新发生的剧情；参考原文里已经写过的场景、对话、段落，一句也不许照抄或换词重写，同一件事不许换个说法再讲一遍；只有剧情确实需要回望时，才允许用一两句话简要提及前情，不得展开复述。`,
+    forwardBlock,
     ``,
     `【五、群像互动、伏笔真实性与去 AI 味铁律】`,
     `- 配角群像与无名禁用：严禁写成主角自言自语的独角戏！但凡参与交锋、对白、交易、救援或传话的配角/对手/小人物，均须赋予有姓有名的真实身份与独特说话腔调，禁止用“黑衣人”“神秘人”“管家”“店小二”“路人甲”代替有戏份的角色。`,
@@ -1386,7 +1529,7 @@ export async function runPrepareCommit(
         `3. characterStateUpdates: 本章出场人物的最新状态`,
         `4. newCharacters: 本章正文中新出场且有真实姓名（不在上述已有人物列表中，且非“黑衣人/路人/店小二”等无名泛称）的关键新配角或新对手档案；无则输出空数组 []。`,
         `5. newKnowsEntries: 本章某个角色明确新得知的事实（必须在本章正文里有依据）`,
-        `6. newForeshadowing: 仅限本章正文中新埋下且【台账中尚不存在】的悬念伏笔（ID 必须从 ${foreshadowCtx.nextSuggestedId} 起顺延，带 payoffDue 预期章号；无则输出空数组）`,
+        `6. newForeshadowing: 仅限本章正文中新埋下且【台账中尚不存在】的悬念伏笔（ID 必须从 ${foreshadowCtx.nextSuggestedId} 起顺延，带 payoffDue 预期章号；为每条新伏笔标定 scope（series 全书主线 / volume 卷级 / episode 单集线）与 kind（reveal 真相揭示 / conflict 冲突 / relationship 关系 / other 其他）；新埋伏笔的 payoffDue 不得晚于本书完结窗口（${targetSummaryLine(book)}）；无则输出空数组）`,
         `7. paidForeshadowingIds: 本章正文中已经明确完结/揭晓的已有伏笔 ID 列表（必须严格来自上方【未结/逾期伏笔台账】，严禁自造 ID）`,
         `8. updatedForeshadowing: 若上方【已逾期/未结伏笔】在本章正文被引入推进但尚未彻底完结，或需顺延，在此标明 status ("progressing" | "deferred")、大于 ${contract.chapter} 的新兑现章号 newPayoffDue 及简短说明 note；无则输出空数组。`,
       ].join('\n'),
@@ -1447,6 +1590,8 @@ export async function runPrepareCommit(
                   id: { type: Type.STRING },
                   payoffDue: { type: Type.INTEGER },
                   thread: { type: Type.STRING },
+                  scope: { type: Type.STRING },
+                  kind: { type: Type.STRING },
                 },
                 required: ['id', 'payoffDue', 'thread'],
               },
@@ -1531,10 +1676,19 @@ export async function runArcReview(book: BookProject): Promise<{
       `执行 long-novel-workflow Step 4【卷末 / 阶段复盘 (Arc Review)】。`,
       `书名：《${book.title}》`,
       `全书罗盘：${book.outline.compass.endDirection} | 核心悬念：${book.outline.compass.centralQuestion}`,
+      `目标：${targetSummaryLine(book)}`,
+      // 阶段复盘是唯二可看完整终局蓝图的步骤（另一是圣经生成）：评估当前节奏
+      // 能否按期落地终局，并据此规划下一卷。
+      book.outline.compass.endingSummary
+        ? `一句话核心结局：${book.outline.compass.endingSummary}`
+        : '一句话核心结局：暂未设定。',
+      book.outline.compass.plannedEnding
+        ? `完整终局蓝图（导演专用，仅供复盘判断节奏是否来得及，不可写入正文）：${book.outline.compass.plannedEnding}`
+        : '完整终局蓝图：暂未设定。',
       `已提交摘要：\n${book.state.summaries.map((s) => `Ch${s.chapter}: ${s.summary}`).join('\n')}`,
       `人物快照：\n${book.state.characterStates.map((c) => `- ${c.characterName}: ${c.currentState}`).join('\n')}`,
       `伏笔台账：\n${book.state.foreshadowing.map((f) => `${f.id} [${f.status}] due:${f.payoffDue}: ${f.thread}`).join('\n')}`,
-      `请从第 ${nextStart} 章起规划接下来 5 章的新节奏（desire 从 ${ALL_DESIRE_KEYS_LIST} 中选择）、配角群像召回与伏笔回收方案。`,
+      `请从第 ${nextStart} 章起规划接下来 5 章的新节奏（desire 从 ${ALL_DESIRE_KEYS_LIST} 中选择）、配角群像召回与伏笔回收方案，并评估当前节奏能否按期落地终局（若来不及，指出需要压缩或归档的线）。`,
     ].join('\n\n'),
     config: {
       responseMimeType: 'application/json',
@@ -1723,6 +1877,9 @@ export async function runImportManuscript(params: {
     formula: 'imported-manuscript + continuity-kernel',
     gate1Approved: true,
     gate2Approved: true,
+    // 导入的旧稿默认不设目标章数（老书退化、自由连载）；建好后到台账页补填目标与结局。
+    bookStatus: 'ongoing',
+    outlineRevision: 1,
     bible: {
       premise: parsed.premise,
       era: parsed.era,
@@ -1827,6 +1984,22 @@ export async function runAutoChapterBundle(
     .filter((c) => c.chapter < chapterNum && c.chapter >= chapterNum - 2)
     .sort((a, b) => a.chapter - b.chapter);
 
+  // 连写循环也可能选中中间的草稿章（后章已存在）：同单章写章，后章衔接必须喂进去。
+  const nextChapter = book.chapters.find((c) => c.chapter === chapterNum + 1);
+  const nextSummary = nextChapter
+    ? book.state.summaries.find((s) => s.chapter === nextChapter.chapter)?.summary || '（无摘要）'
+    : '';
+  const forwardBlock = nextChapter
+    ? [
+        `【后章衔接】本章不是最新章，后面已有第 ${nextChapter.chapter} 章《${nextChapter.contract.title}》写完并定稿，写本章必须与它衔接：`,
+        `下一章开篇交接（它写明了如何承接本章）：${nextChapter.contract.transition}`,
+        `下一章必须发生：${nextChapter.contract.mustHappen}`,
+        `下一章摘要：${nextSummary}`,
+        `下一章正文开头（前 600 字，已定稿，不可改动）：\n${nextChapter.prose.slice(0, 600)}`,
+        `要求：本章结尾必须自然接到下一章开头——同一时间、同一地点、同一批人物、同一状态；不得改动下一章开头已经写定的人物、地点、对话与事实；不得让下一章的开篇失去前提；不得提前写掉下一章才发生的剧情。`,
+      ].join('\n')
+    : '';
+
   const manualDesire: DesireKey | null =
     existingContract?.desire &&
     existingContract.desire !== 'auto' &&
@@ -1849,11 +2022,27 @@ export async function runAutoChapterBundle(
     : `contract.desire 当前为「AI 自动判断选择 (auto)」，请从以下 8 种核心读者欲望中自主择一最精准驱动本章戏剧张力的类型并写入 contract.desire：${ALL_DESIRE_GUIDE}。`;
 
   const payoffInstruction =
-    chapterNum % 10 === 0
-      ? `第 ${chapterNum} 章是 10 的倍数卷节点，contract.payoffSize 必须为 "big"，并在正文中彻底交付阶段大高潮/大反转/大破局！`
+    (existingContract?.chapterKind ?? 'main') === 'main' &&
+    bigCadenceFor(book.outline.compass.targetChapters) != null &&
+    chapterNum % bigCadenceFor(book.outline.compass.targetChapters)! === 0
+      ? `第 ${chapterNum} 章是大节点章（bigCadence=${bigCadenceFor(book.outline.compass.targetChapters)}），contract.payoffSize 必须为 "big"，并在正文中彻底交付阶段大高潮/大反转/大破局！`
       : manualPayoff
       ? `作者已指定兑现级别 payoffSize="${manualPayoff}"，请在正文中严格匹配该烈度的戏剧兑现！`
       : `contract.payoffSize 当前为「AI 自动判断并执行 (auto)」，请自主选择 "small" 或 "big"${chapterNum % 3 === 0 ? '（本章为 3 的倍数节点，不可为 none）' : ''}，并在正文中扎实写出对应强度的实体行动兑现与节奏收束！`;
+
+  // 单次合并路径（省配额 opt-in 才走）：合同与正文一次请求。提示词里可带一句话
+  // 结局摘要供合同把关，但须明令不得外露结尾细节；完整终局蓝图绝不出现。
+  // 默认两步隔离时工作台不调本函数，改走先合同后正文的两步。
+  const bundleKind = (existingContract?.chapterKind ?? 'main') as 'main' | 'epilogue' | 'extra';
+  const bundlePhaseInfo =
+    bundleKind === 'main'
+      ? getPhaseInfo(
+          chapterNum,
+          1,
+          book.outline.compass.targetChapters,
+          book.outline.compass.tolerance
+        )
+      : null;
 
   const prompt = [
     `为长篇小说《${book.title}》第 ${chapterNum} 章执行【单次全自动创作闭环】：一次性输出本章合同（contract）、完整正文（prose）与正史状态变更（commit）。`,
@@ -1871,7 +2060,16 @@ export async function runAutoChapterBundle(
       ? `作者已填合同要点参考：标题=${existingContract.title}，兑现=${existingContract.desirePayoff}，必须发生=${existingContract.mustHappen}，钩子=${existingContract.hook}`
       : '',
     `前情摘要：\n${book.state.summaries.slice(-6).map((s) => `- Ch${s.chapter}: ${s.summary}`).join('\n') || '无'}`,
+    bundlePhaseInfo ? bundlePhaseInfo.phaseLine : '',
+    bundleKind !== 'main'
+      ? `本章为${bundleKind === 'epilogue' ? '后记' : '番外'}：不计入主线进度，豁免阶段/节奏/大兑现检查。`
+      : '',
+    book.outline.compass.endingSummary
+      ? `一句话核心结局（仅供合同把关方向；正文里绝不写出、绝不暗示、绝不提前泄底）：${book.outline.compass.endingSummary}`
+      : '',
     ...recentChapters.map((c) => `--- 第 ${c.chapter} 章参考原文 ---\n${c.prose}`),
+    `【防重写铁律】上面“参考原文”是已经写完的前章正文，只供你衔接剧情、保持人设与语调，绝不是让你重写的内容：本章必须从上一章结尾之后开始写（按上一章交接 transition 承接），只写新发生的剧情；参考原文里已经写过的场景、对话、段落，一句也不许照抄或换词重写，同一件事不许换个说法再讲一遍；只有剧情确实需要回望时，才允许用一两句话简要提及前情，不得展开复述。`,
+    forwardBlock,
     `写作硬规矩：`,
     `1. 章节标题 contract.title 必须以“第${chapterNum}章”开头（如“第${chapterNum}章 ……”）。`,
     `2. ${desireInstruction}`,

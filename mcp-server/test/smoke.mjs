@@ -159,9 +159,11 @@ async function main() {
     const list = await client.request('tools/list', {});
     const toolNames = (list.result.tools || []).map((t) => t.name);
     const expected = ['listBooks', 'getBook', 'getChapter', 'draftContract', 'saveChapterDraft', 'auditChapter',
-      'commitChapter', 'rollbackChapter', 'listForeshadowing', 'markForeshadowingPaid', 'extendForeshadowing',
-      'scheduleForeshadowingPayoff', 'marketScan', 'getWorkflow'];
-    check('tools/list returns 14 tools', toolNames.length === 14 && expected.every((n) => toolNames.includes(n)),
+      'commitChapter', 'rollbackChapter', 'submitUserOutline', 'validateSubmission', 'checkFidelity', 'checkContract',
+      'getSubmissionLevel', 'listForeshadowing', 'markForeshadowingPaid', 'extendForeshadowing',
+      'scheduleForeshadowingPayoff', 'getPhase', 'getEndingPlan', 'saveEndingPlan', 'retargetBook',
+      'exportSequelSeed', 'importSequelSeed', 'completeBook', 'reopenBook', 'marketScan', 'getWorkflow'];
+    check('tools/list returns 27 tools', toolNames.length === 27 && expected.every((n) => toolNames.includes(n)),
       `got: ${toolNames.join(', ')}`);
 
     const books = await client.callTool('listBooks', {});
@@ -273,6 +275,141 @@ async function main() {
     const workflow = await client.callTool('getWorkflow', {});
     check('getWorkflow returns skill text + hard rules', !workflow.isError && workflow.data.skillText.includes('Hook handoff') && workflow.data.hardRules.length >= 10,
       `hardRules: ${workflow.data.hardRules.length}`);
+
+    // ---- v2.2.0–v2.4.0 user-driven tools --------------------------------
+    // The outline below matches the mini-book fixture's committed chapter 1
+    // exactly (title, hook, desire, characters, F01, beat keywords in the
+    // prose), so fidelity + contract checks pass on it.
+    const goodOutline = {
+      book: { title: '迷你测试', language: 'zh', targetChapters: 2 },
+      arcs: [{ name: '卷一', range: '1-2', frozen: false }],
+      chapters: [
+        {
+          chapter: 1, title: '钥匙断了', desire: 'curiosity', payoffSize: 'small',
+          hook: '钥匙断了，而上一世，它明明一直在门后的钉子上',
+          characters: ['阿测', '阿验'], foreshadowingPlanted: ['F01'], foreshadowingPaid: [],
+          mustHappen: [
+            // Keywords must appear in the chapter BODY (check_fidelity strips
+            // the frontmatter first) — 老宅 only appears in the contract
+            // frontmatter, so it cannot be a keyword here.
+            { beat: '阿测回到三年前，回到老宅', keywords: ['梧桐树', '闹钟'] },
+            { beat: '她去书房看抽屉，发现抽屉上了锁、钥匙断了', keywords: ['书房', '抽屉'] },
+          ],
+        },
+        {
+          chapter: 2, title: '没有落款的信', desire: 'curiosity', payoffSize: 'small',
+          hook: '信纸的水印属于一家三年前就关门的旧书店，而店主死后店就一直锁着',
+          characters: ['阿测'], foreshadowingPlanted: ['F02'], foreshadowingPaid: [],
+          mustHappen: [
+            { beat: '阿测在书房找到一封没有落款的信', keywords: ['书房', '信'] },
+          ],
+        },
+      ],
+      characters: [
+        { name: '阿测', age: 23, role: '主角', want: '弄清楚抽屉里的东西是谁的', flaw: '太急于求证' },
+        { name: '阿验', age: 26, role: '兄长', want: '护住妹妹', flaw: '话太少' },
+      ],
+      threads: [
+        { id: 'F01', planted: 1, payoffDue: 5, status: 'open', thread: '书房抽屉上锁，钥匙断了' },
+        { id: 'F02', planted: 2, payoffDue: 6, status: 'open', thread: '没有落款的信，信纸有旧书店水印' },
+      ],
+    };
+    const level0 = await client.callTool('getSubmissionLevel', { book: 'mini-book' });
+    check('getSubmissionLevel before submit is L0', !level0.isError && level0.data.level.some((l) => l.startsWith('LEVEL: 0')),
+      JSON.stringify(level0.data.level));
+    const submitted = await client.callTool('submitUserOutline', { book: 'mini-book', outline: goodOutline, characters: goodOutline.characters, threads: goodOutline.threads });
+    check('submitUserOutline writes files + validation passes', !submitted.isError && submitted.data.validation.pass === true,
+      JSON.stringify(submitted.data.validation));
+    const levelAfter = await client.callTool('getSubmissionLevel', { book: 'mini-book' });
+    check('getSubmissionLevel after submit is L4 (drafts/ has ch2)', !levelAfter.isError && levelAfter.data.level.some((l) => l.startsWith('LEVEL: 4')),
+      JSON.stringify(levelAfter.data.level));
+    const validated = await client.callTool('validateSubmission', { book: 'mini-book' });
+    check('validateSubmission passes on the submitted outline', !validated.isError && validated.data.pass === true,
+      JSON.stringify(validated.data));
+    const fidelity = await client.callTool('checkFidelity', { book: 'mini-book' });
+    check('checkFidelity passes (ch1 matches the outline)', !fidelity.isError && fidelity.data.pass === true,
+      JSON.stringify(fidelity.data));
+    const contractCheck = await client.callTool('checkContract', { book: 'mini-book' });
+    check('checkContract passes (contracts match prose)', !contractCheck.isError && contractCheck.data.pass === true,
+      JSON.stringify(contractCheck.data));
+    const outlineOnDisk = await fs.readFile(path.join(fixtureBook, 'user_submission', 'user_outline.yaml'), 'utf8');
+    check('submitUserOutline wrote user_outline.yaml on disk', outlineOnDisk.includes('钥匙断了') && outlineOnDisk.includes('mode: user-driven'),
+      outlineOnDisk.slice(0, 120));
+    const badOutline = JSON.parse(JSON.stringify(goodOutline));
+    badOutline.chapters[0].hook = '太短了';
+    const badSubmit = await client.callTool('submitUserOutline', { book: 'mini-book', outline: badOutline, characters: goodOutline.characters, threads: goodOutline.threads });
+    check('submitUserOutline with a too-short hook reports validation failure', !badSubmit.isError && badSubmit.data.validation.pass === false,
+      JSON.stringify(badSubmit.data.validation));
+    const restored = await client.callTool('submitUserOutline', { book: 'mini-book', outline: goodOutline, characters: goodOutline.characters, threads: goodOutline.threads });
+    check('re-submit restores a passing outline', !restored.isError && restored.data.validation.pass === true,
+      JSON.stringify(restored.data.validation));
+
+    // ---- v2.1.0 ending-plan tools --------------------------------------
+    const phaseNoTarget = await client.callTool('getPhase', { book: 'mini-book', chapter: 2 });
+    check('getPhase with no target reports targetSet false (legacy fallback)',
+      !phaseNoTarget.isError && phaseNoTarget.data.targetSet === false,
+      JSON.stringify(phaseNoTarget.data));
+
+    const savedEnding = await client.callTool('saveEndingPlan', {
+      book: 'mini-book',
+      endingSummary: 'SMOKE-ENDING-SUMMARY 阿测烧掉旧信放下执念',
+      plannedEnding: 'SMOKE-PLANNED-ENDING 终局高潮在祠堂对质；主角归宿是离开小城；核心问题答案是信出自亡母之手',
+    });
+    check('saveEndingPlan stores the ending plan', !savedEnding.isError && savedEnding.data.saved.endingSummary === true,
+      JSON.stringify(savedEnding.data));
+    const endingPlan = await client.callTool('getEndingPlan', { book: 'mini-book' });
+    check('getEndingPlan returns the full ending (director-only)',
+      !endingPlan.isError && endingPlan.data.plannedEnding.includes('SMOKE-PLANNED-ENDING') && endingPlan.data.endingSummary.includes('SMOKE-ENDING-SUMMARY'),
+      JSON.stringify(endingPlan.data).slice(0, 160));
+    const bookRedacted = await client.callTool('getBook', { book: 'mini-book' });
+    check('getBook redacts the planned ending but keeps the one-sentence summary',
+      !bookRedacted.isError && !bookRedacted.data.outline['overview.md'].includes('SMOKE-PLANNED-ENDING') && bookRedacted.data.outline['overview.md'].includes('SMOKE-ENDING-SUMMARY'),
+      '');
+
+    const retarget5 = await client.callTool('retargetBook', { book: 'mini-book', targetChapters: 5 });
+    check('retargetBook to T=5 succeeds (F01 payoff 5 inside window 6)',
+      !retarget5.isError && retarget5.data.status === 'retargeted' && retarget5.data.winEnd === 6,
+      JSON.stringify(retarget5.data));
+    const phaseT5 = await client.callTool('getPhase', { book: 'mini-book', chapter: 2 });
+    check('getPhase ch2 at T=5 is middle with the phase line',
+      !phaseT5.isError && phaseT5.data.phase === 'middle' && phaseT5.data.phaseLine.includes('中盘博弈期'),
+      JSON.stringify(phaseT5.data).slice(0, 200));
+    const retarget3triage = await client.callTool('retargetBook', { book: 'mini-book', targetChapters: 3 });
+    check('retargetBook to T=3 needs triage (F01 payoff 5 past window 4)',
+      !retarget3triage.isError && retarget3triage.data.status === 'needs-triage' && retarget3triage.data.overWindow.some((t) => t.id === 'F01'),
+      JSON.stringify(retarget3triage.data));
+    const retarget3 = await client.callTool('retargetBook', {
+      book: 'mini-book', targetChapters: 3, resolutions: [{ id: 'F01', action: 'archive' }],
+    });
+    check('retargetBook to T=3 with archive resolution succeeds',
+      !retarget3.isError && retarget3.data.status === 'retargeted' && retarget3.data.archived.includes('F01'),
+      JSON.stringify(retarget3.data));
+    const ledgerAfter = await client.callTool('listForeshadowing', { book: 'mini-book' });
+    check('F01 is archived after retarget',
+      !ledgerAfter.isError && ledgerAfter.data.threads.find((t) => t.id === 'F01').status === 'archived',
+      JSON.stringify(ledgerAfter.data.threads));
+
+    const seed = await client.callTool('exportSequelSeed', { book: 'mini-book' });
+    check('exportSequelSeed returns a v1 seed',
+      !seed.isError && seed.data.seed.seedVersion === 1 && seed.data.seed.sourceBookId === 'mini-book' && seed.data.seed.completedAtChapter === 1,
+      JSON.stringify(seed.data.seed).slice(0, 200));
+
+    const gate3review = await client.callTool('completeBook', { book: 'mini-book' });
+    check('completeBook review (no confirm) reports final chapter + no unclosed threads',
+      !gate3review.isError && gate3review.data.status === 'review' && gate3review.data.finalChapter === 1 && gate3review.data.unclosedThreads.length === 0,
+      JSON.stringify(gate3review.data));
+    const gate3done = await client.callTool('completeBook', { book: 'mini-book', confirm: true });
+    check('completeBook with confirm flips the book to completed',
+      !gate3done.isError && gate3done.data.status === 'completed' && gate3done.data.completedAtChapter === 1,
+      JSON.stringify(gate3done.data));
+    const bookCompleted = await client.callTool('getBook', { book: 'mini-book' });
+    check('getBook compass shows completed status',
+      !bookCompleted.isError && bookCompleted.data.compass.bookStatus === 'completed',
+      JSON.stringify(bookCompleted.data.compass));
+    const reopened = await client.callTool('reopenBook', { book: 'mini-book' });
+    check('reopenBook flips the book back to ongoing',
+      !reopened.isError && reopened.data.status === 'ongoing',
+      JSON.stringify(reopened.data));
 
     const badBook = await client.callTool('getBook', { book: 'does-not-exist' });
     check('getBook on unknown book returns an error, not invented data', badBook.isError && /not found/i.test(badBook.raw),

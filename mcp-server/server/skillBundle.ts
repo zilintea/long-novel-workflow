@@ -12,8 +12,8 @@ export interface BundlePaths {
 }
 
 const BUNDLE_DIR = path.join(os.tmpdir(), 'long-novel-workflow-release-cache');
-const ZIP_PATH = path.join(BUNDLE_DIR, 'long-novel-workflow-v2.0.0.zip');
-const TARGZ_PATH = path.join(BUNDLE_DIR, 'long-novel-workflow-v2.0.0.tar.gz');
+const ZIP_PATH = path.join(BUNDLE_DIR, 'long-novel-workflow-v2.1.0.zip');
+const TARGZ_PATH = path.join(BUNDLE_DIR, 'long-novel-workflow-v2.1.0.tar.gz');
 
 const PYTHON_PACKAGER = `
 import json, os, shutil, sys, tarfile, zipfile
@@ -28,7 +28,7 @@ if not os.path.isdir(skill_dir):
     raise RuntimeError("skill-repo directory not found")
 
 stage_root = os.path.join(cache_dir, "stage")
-bundle_root = os.path.join(stage_root, "long-novel-workflow-v2.0.0")
+bundle_root = os.path.join(stage_root, "long-novel-workflow-v2.1.0")
 shutil.rmtree(stage_root, ignore_errors=True)
 os.makedirs(cache_dir, exist_ok=True)
 
@@ -85,10 +85,10 @@ merged_dev_deps.update(mcp_pkg.get("devDependencies", {}))
 
 merged_pkg = {
     "name": mcp_pkg.get("name", "long-novel-mcp"),
-    "version": "2.0.0",
+    "version": "2.1.0",
     "private": True,
     "type": "module",
-    "description": "MCP server & Full-Stack Web Workbench (Long Novel Studio) for long-novel-workflow v2.0.0",
+    "description": "MCP server & Full-Stack Web Workbench (Long Novel Studio) for long-novel-workflow v2.1.0",
     "author": mcp_pkg.get("author", "zilintea"),
     "license": mcp_pkg.get("license", "MIT"),
     "engines": mcp_pkg.get("engines", {"node": ">=18"}),
@@ -132,7 +132,7 @@ with zipfile.ZipFile(tmp_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslev
             file_count += 1
 
 with tarfile.open(tmp_targz, "w:gz") as tf:
-    tf.add(bundle_root, arcname="long-novel-workflow-v2.0.0")
+    tf.add(bundle_root, arcname="long-novel-workflow-v2.1.0")
 
 os.replace(tmp_zip, zip_path)
 os.replace(tmp_targz, targz_path)

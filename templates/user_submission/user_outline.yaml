@@ -1,0 +1,64 @@
+# user_outline.yaml — 用户供稿大纲（source: user，锁定）
+# 格式是受限 YAML 子集（scripts/user_outline.py 用标准库解析，不依赖 PyYAML）：
+# 只用 `key: value`、两格缩进的 `- key: value` 列表、以及 `[a, b]` 行内列表。
+# 章号必须从 1 开始连续，不重不漏；每章必须有 title、hook、must_happen、characters。
+# must_happen 每条节拍必须有 keywords（2-4 个正文里一定会出现的人名、物名或动作词），
+# check_fidelity.py 靠 keywords 逐条核对节拍是否写进了正文；keywords 是底线，人审再看语义。
+# 每条节拍可加 budget（目标字数，中文按字、英文按词）；不写则按章目标均分
+# （默认中文 3000 字，可用 book.chapter_target_chars 改）。单条低于 200 字
+# （英文 100 词）校验不通过——撑不起一场戏，须先扩写节拍再动笔。
+book:
+  title: 书名
+  language: zh
+  mode: user-driven
+  target_chapters: 80
+  chapter_target_chars: 3000
+arcs:
+  - name: 卷一
+    range: 1-3
+    frozen: true
+chapters:
+  - chapter: 1
+    title: 回村的路
+    desire: bond-resonance
+    payoff_size: small
+    hook: 奶奶看着他，喊了一声“远山”
+    characters: [陆时安, 陈桂香]
+    foreshadowing_planted: [F04]
+    foreshadowing_paid: []
+    must_happen:
+      - beat: 2026年3月，陆时安坐中巴、换摩托、走石板路回村
+        keywords: [中巴, 摩托, 石板路]
+        budget: 1200
+      - beat: 奶奶在院门口摆两张凳子、点一盏灯
+        keywords: [两张凳子, 灯]
+      - beat: 晚饭多摆一副碗筷在空位上，陆时安只“嗯”了一声
+        keywords: [碗筷, 空位]
+  - chapter: 2
+    title: 八张底片
+    desire: curiosity
+    payoff_size: small
+    hook: 底片袋夹层里还有一张，画面全黑，背后写着一行字
+    characters: [陆时安, 陈桂香]
+    foreshadowing_planted: [F05]
+    foreshadowing_paid: []
+    must_happen:
+      - beat: 半夜陆时安睡不着，翻出父亲的旧相机和八张底片
+        keywords: [旧相机, 八张底片]
+      - beat: 八张底片按年份排好，1980到2021各一张
+        keywords: [1980, 2021]
+      - beat: 奶奶随口说父亲烧掉一半底片，陆时安第一次听说
+        keywords: [烧掉一半]
+  - chapter: 3
+    title: 木屋红联
+    desire: curiosity
+    payoff_size: small
+    hook: 信封上写着收信人“陆时安”，寄信人只写了一个字
+    characters: [陆时安, 阿豆]
+    foreshadowing_planted: [F03]
+    foreshadowing_paid: []
+    must_happen:
+      - beat: 陆时安按2016年照片的机位重拍木屋，红联褪成粉白
+        keywords: [木屋, 红联]
+      - beat: 门缝里塞着一封2023年的信，收信人是陆时安
+        keywords: [门缝, 信]

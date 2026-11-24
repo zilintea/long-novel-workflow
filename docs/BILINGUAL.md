@@ -20,7 +20,7 @@ number. `SKILL.md` and the scripts never hard-code a language.
 
 | Item | zh | en |
 |---|---|---|
-| Chapter length (serial) | 2000–3000 characters | 1500–2500 words |
+| Chapter length (serial) | 2100–4000 characters | 1500–2500 words |
 | Chapter length (probe/excerpt) | 800+ characters | 600+ words |
 | Paragraph | short, often 1–3 sentences | short, often 1–3 sentences |
 | Dialogue share | high (serial fiction reads on dialogue) | high |

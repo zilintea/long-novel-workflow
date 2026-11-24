@@ -12,7 +12,10 @@ desire: auto            # auto (AI picks best) | curiosity | identification-upgr
                         #   revenge-compensation | being-loved | escape-comfort |
                         #   survival-breakout | power-scheme | bond-resonance
 desire_payoff: <what this chapter actually delivers for that desire, in one sentence>
-payoff_size: auto       # auto | small | big — chapters 3,6,9... resolve to small|big; 10,20,30... must be big
+payoff_size: auto       # auto | small | big — draft chapters at multiples of 3 resolve to small|big;
+                        # chapters at multiples of the dynamic big cadence must be big
+                        # (bigCadence = clamp(round_half_up(0.1T), 5, 20), T < 30 skips it;
+                        # committed chapters are checked against big_cadence_snapshot)
 hook: <the end hook, in one sentence — the reason to read the next chapter>
 transition: <how this chapter hands off to the next: what state, place, time and
              knowledge the next chapter starts from. Continuous = next chapter
@@ -24,6 +27,9 @@ characters: <2-4 named characters present — avoid solo monologue or nameless p
              new named supporting roles are auto-registered in bible/characters.md on commit>
 foreshadowing_planted: <F-ids planted here, or ->
 foreshadowing_paid: <F-ids paid off here, or ->
+chapter_kind: main      # main | epilogue | extra (epilogue/extra skip phase/payoff/cadence checks)
+big_cadence_snapshot:   # filled at commit time; leave blank in drafts
+is_probe: false         # true for probe/excerpt chapters (probe floor: zh 800 chars / en 600 words)
 ```
 
 ## Notes for the writer
@@ -39,5 +45,6 @@ foreshadowing_paid: <F-ids paid off here, or ->
 - A character may guess, suspect or misread — never *know* what they were
   never told (see `state/knows.md`). To give them information, show how they
   got it in the prose.
-- Chapter length: zh 2000–4000 characters; en 1500–2500 words.
-  Probe/excerpt chapters may be shorter — say so in the contract.
+- Chapter length: zh 2100–4000 characters (probe floor 800; short-word mode 1500);
+  en 1500–2500 words (probe floor 600). Above the max is a warning, never blocking.
+  Probe/excerpt chapters may be shorter — set `is_probe: true` in the contract.

@@ -71,6 +71,9 @@ const FIELD_ORDER = [
   'characters',
   'foreshadowing_planted',
   'foreshadowing_paid',
+  'chapter_kind',
+  'big_cadence_snapshot',
+  'is_probe',
 ];
 
 export function serializeFrontmatterFile(fields, body) {
@@ -165,59 +168,71 @@ export async function listChapters(root, id) {
   return out;
 }
 
-// ---------------------------------------------------------------------- ledger
+// Ledger line format (see templates/foreshadowing_ledger.md):
+// `- F01 | planted: 1 | payoff_due: 5 | status: open | scope: series | kind: reveal | thread: ...`
+// scope/kind are optional on read (old lines lack them) and default to series/other.
+// The regex below only anchors the fixed prefix; scope/kind/target_chapter are
+// searched in the remainder so field order after status stays tolerant.
+const LEDGER_PREFIX_RE =
+  /^-\s*(F\d+)\s*\|\s*planted:\s*(\d+)\s*\|\s*payoff_due:\s*(\d+|—|-)?\s*\|\s*status:\s*(\w+)\s*(?:\|(.*))?$/;
 
-const LEDGER_RE =
-  /^-\s*(F\d+)\s*\|\s*planted:\s*(\d+)\s*\|\s*payoff_due:\s*(\d+|—|-)?\s*\|\s*status:\s*(\w+)\s*(?:\|\s*target_chapter:\s*(\d+)\s*)?\|\s*thread:\s*(.*)$/;
+function parseLedgerLine(line) {
+  const m = line.match(LEDGER_PREFIX_RE);
+  if (!m) return null;
+  const rest = m[5] || '';
+  const scopeM = rest.match(/scope:\s*(series|volume|episode)/);
+  const kindM = rest.match(/kind:\s*(reveal|conflict|relationship|other)/);
+  const targetM = rest.match(/target_chapter:\s*(\d+)/);
+  const threadM = rest.match(/thread:\s*(.*?)\s*$/);
+  return {
+    id: m[1],
+    planted: Number(m[2]),
+    payoffDue: m[3] && /^\d+$/.test(m[3]) ? Number(m[3]) : null,
+    status: m[4],
+    scope: scopeM ? scopeM[1] : 'series',
+    kind: kindM ? kindM[1] : 'other',
+    targetChapter: targetM ? Number(targetM[1]) : null,
+    thread: threadM ? threadM[1].trim() : '',
+  };
+}
 
 export function parseLedger(text) {
   const threads = [];
   for (const line of text.split('\n')) {
-    const m = line.match(LEDGER_RE);
-    if (m) {
-      threads.push({
-        id: m[1],
-        planted: Number(m[2]),
-        payoffDue: m[3] && /^\d+$/.test(m[3]) ? Number(m[3]) : null,
-        status: m[4],
-        targetChapter: m[5] ? Number(m[5]) : null,
-        thread: m[6].trim(),
-      });
-    }
+    const t = parseLedgerLine(line);
+    if (t) threads.push(t);
   }
   return threads;
 }
 
 export function ledgerLine(t) {
   const targetPart = t.targetChapter ? ` | target_chapter: ${t.targetChapter}` : '';
-  return `- ${t.id} | planted: ${t.planted} | payoff_due: ${t.payoffDue ?? '—'} | status: ${t.status}${targetPart} | thread: ${t.thread}`;
+  const scopePart = t.scope ? ` | scope: ${t.scope}` : '';
+  const kindPart = t.kind ? ` | kind: ${t.kind}` : '';
+  return `- ${t.id} | planted: ${t.planted} | payoff_due: ${t.payoffDue ?? '—'} | status: ${t.status}${scopePart}${kindPart}${targetPart} | thread: ${t.thread}`;
 }
 
 // Apply ledger edits to the file text, preserving header/comments and line order.
-// edits: { markPaid: [ids], plant: [{id, planted, payoffDue, thread}], extend: [{id, payoffDue}],
-//          reopen: [ids], removePlantedByChapter: chapterNumber }
+// edits: { markPaid: [ids], archive: [ids], plant: [{id, planted, payoffDue, thread, scope?, kind?}],
+//          extend: [{id, payoffDue}], retarget: [{id, payoffDue}], reopen: [ids],
+//          removePlantedByChapter: chapterNumber }
+// `extend` defers (status open -> deferred); `retarget` only moves the payoff
+// date (used when compressing a thread into a shorter book's end window).
 export function applyLedgerEdits(text, edits) {
   const lines = text.split('\n');
   const out = [];
   const plantedIds = new Set((edits.plant || []).map((t) => t.id));
   for (const line of lines) {
-    const m = line.match(LEDGER_RE);
-    if (!m) {
+    const t = parseLedgerLine(line);
+    if (!t) {
       out.push(line);
       continue;
     }
-    const t = {
-      id: m[1],
-      planted: Number(m[2]),
-      payoffDue: m[3] && /^\d+$/.test(m[3]) ? Number(m[3]) : null,
-      status: m[4],
-      targetChapter: m[5] ? Number(m[5]) : null,
-      thread: m[6].trim(),
-    };
     if (edits.removePlantedByChapter !== undefined && t.planted === edits.removePlantedByChapter) {
       continue; // thread was planted by the rolled-back chapter: drop the line
     }
     if ((edits.markPaid || []).includes(t.id)) t.status = 'paid';
+    if ((edits.archive || []).includes(t.id)) t.status = 'archived';
     if ((edits.reopen || []).includes(t.id)) t.status = 'open';
     const ext = (edits.extend || []).find((e) => e.id === t.id);
     if (ext) {
@@ -225,14 +240,103 @@ export function applyLedgerEdits(text, edits) {
       if (t.status === 'open') t.status = 'deferred';
       t.targetChapter = ext.payoffDue;
     }
+    const ret = (edits.retarget || []).find((e) => e.id === t.id);
+    if (ret) t.payoffDue = ret.payoffDue;
     out.push(ledgerLine(t));
   }
   for (const p of edits.plant || []) {
     if (plantedIds.has(p.id) && !out.some((l) => l.startsWith(`- ${p.id} `))) {
-      out.push(ledgerLine({ id: p.id, planted: p.planted, payoffDue: p.payoffDue, status: 'open', thread: p.thread }));
+      out.push(ledgerLine({ id: p.id, planted: p.planted, payoffDue: p.payoffDue, status: 'open', scope: p.scope || 'series', kind: p.kind || 'other', thread: p.thread }));
     }
   }
   return out.join('\n');
+}
+
+// --------------------------------------------------------------------- compass
+// Read the ending-plan compass from outline/overview.md. Missing keys -> null
+// (old book, legacy fallback). Ending summary is one sentence; the full
+// planned ending lives in the `## Planned ending (director-only)` section and
+// is NEVER returned by getBook — see redactPlannedEnding().
+export function parseCompass(text) {
+  const getInt = (key) => {
+    const m = text.match(new RegExp(`^- ${key}:\\s*(\\d+)\\s*$`, 'm'));
+    return m ? Number(m[1]) : null;
+  };
+  const getStr = (key) => {
+    const m = text.match(new RegExp(`^- ${key}:\\s*(.+?)\\s*$`, 'm'));
+    return m ? m[1].trim() : null;
+  };
+  return {
+    targetChapters: getInt('Target chapters'),
+    targetWords: getInt('Target words'),
+    tolerance: getInt('Tolerance'),
+    bookStatus: getStr('Book status') || 'ongoing',
+    endingSummary: getStr('Ending summary'),
+  };
+}
+
+// Remove the `## Planned ending (director-only)` section from overview text
+// (up to the next `## ` heading or EOF). Blind-writing rule (manual §四):
+// prose prompts must never see the full ending; only the explicit
+// getEndingPlan tool returns it, for bible drafting / arc review / Gate 3.
+export function redactPlannedEnding(text) {
+  // Line-based (a regex with `\s*$` in multiline mode stops at the first line
+  // end, so a lazy section match returns empty — do not go back to regex).
+  const lines = text.split('\n');
+  const start = lines.findIndex((l) => l.startsWith('## Planned ending (director-only)'));
+  if (start === -1) return text;
+  const end = lines.findIndex((l, i) => i > start && /^## /.test(l));
+  const kept = [...lines.slice(0, start), ...(end === -1 ? [] : lines.slice(end))];
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+// Replace or insert a `- Key: value` line inside the `## Compass` section of
+// outline/overview.md (insertion goes right after the `## Compass` heading
+// block when the key is absent). value null removes the line.
+export function setCompassLine(text, key, value) {
+  const lines = text.split('\n');
+  const compassIdx = lines.findIndex((l) => /^## Compass/.test(l));
+  const nextSection = lines.findIndex((l, i) => i > compassIdx && /^## /.test(l));
+  const end = nextSection === -1 ? lines.length : nextSection;
+  const re = new RegExp(`^- ${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:`);
+  for (let i = compassIdx + 1; i < end; i++) {
+    if (re.test(lines[i])) {
+      if (value === null || value === undefined || value === '') lines.splice(i, 1);
+      else lines[i] = `- ${key}: ${value}`;
+      return lines.join('\n');
+    }
+  }
+  if (value === null || value === undefined || value === '') return text;
+  // Insert after the last non-empty line of the Compass section so the new
+  // key stays inside the section and the blank line before the next section
+  // is preserved.
+  let insertAt = end;
+  for (let i = end - 1; i > compassIdx; i--) {
+    if (lines[i].trim() !== '') {
+      insertAt = i + 1;
+      break;
+    }
+  }
+  lines.splice(insertAt, 0, `- ${key}: ${value}`);
+  return lines.join('\n');
+}
+
+// Replace the `## Planned ending (director-only)` section (or append it when
+// absent). plannedEnding empty removes the section.
+export function setPlannedEndingSection(text, plannedEnding) {
+  const stripped = redactPlannedEnding(text);
+  if (!plannedEnding || !plannedEnding.trim()) return stripped;
+  const section = `## Planned ending (director-only)\n\n${plannedEnding.trim()}\n`;
+  return stripped.replace(/\s+$/, '') + `\n\n${section}`;
+}
+
+export function extractPlannedEnding(text) {
+  // Line-based — see redactPlannedEnding for why regex does not work here.
+  const lines = text.split('\n');
+  const start = lines.findIndex((l) => l.startsWith('## Planned ending (director-only)'));
+  if (start === -1) return '';
+  const end = lines.findIndex((l, i) => i > start && /^## /.test(l));
+  return lines.slice(start + 1, end === -1 ? undefined : end).join('\n').trim();
 }
 
 // -------------------------------------------------------------------- progress

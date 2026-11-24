@@ -1,6 +1,6 @@
 name: long-novel-workflow
 title: Long Novel Workflow
-description: Long serialised fiction workflow skill (v2.0.0). Supports author-gated and full-auto execution for novels of any length, Chinese or English: bible and outline first, golden 3 chapters first, then one chapter at a time with a chapter contract (8 desires + AI auto payoff sizing), blocking hook/desire/anti-placeholder audit, dynamic cast registration, overdue-aware foreshadowing ledger, and per-character knows lists. File-as-truth, only redo the wrong segment, state rollback on revision. Use when the user says "write a novel", "continue chapter N", "import my manuscript" or "check continuity". Not for video scripts.
+description: Long serialised fiction workflow skill (v2.4.0). Supports author-gated, full-auto, and user-driven execution for novels of any length, Chinese or English: bible and outline first, golden 3 chapters first, then one chapter at a time with a chapter contract (8 desires + AI auto payoff sizing), blocking hook/desire/anti-placeholder audit, dynamic cast registration, overdue-aware foreshadowing ledger, and per-character knows lists. User-driven mode takes the author's own brief + outline + chapter data (user_submission/), classifies its completeness (L0-L4), validates it with per-beat word budgets, restates it back with gaps sorted into must-ask vs ai-may-fill, derives contracts from it, and checks every chapter for fidelity to it and for contract consistency — locked user fields, frozen arcs, versioned outline revisions with impact lists, no invented chapters. The MCP server exposes the same checks as tools (submitUserOutline / validateSubmission / checkFidelity / checkContract / getSubmissionLevel) and runs the same Python scripts. File-as-truth, only redo the wrong segment, state rollback on revision. Use when the user says "write a novel", "continue chapter N", "import my manuscript", "write it from my outline" or "check continuity". Not for video scripts.
 category: Writing
 triggers:
   - write a novel
@@ -9,9 +9,13 @@ triggers:
   - 续写
   - import my manuscript
   - 导入旧稿
+  - write it from my outline
+  - 按我的大纲写
+  - user outline
+  - 用户供稿
   - check continuity
   - continuity audit
   - foreshadowing
   - 伏笔
 include_in_prompt: true
-source: original, synthesised from public long-form writing research (v1.0.0 2026-11-13, v2.0.0 2026-11-15) — file-as-truth, chapter contracts, foreshadowing ledgers, knows lists, bounded audit, dynamic cast growth — plus the gates of universal-story-workflow v3.10, translated from video to text. No code or text copied from any surveyed repo.
+source: original, synthesised from public long-form writing research (v1.0.0 2026-11-13, v2.0.0 2026-11-15, v2.1.0 2026-11-16) — file-as-truth, chapter contracts, foreshadowing ledgers, knows lists, bounded audit, dynamic cast growth — plus the gates of universal-story-workflow v3.10, translated from video to text. No code or text copied from any surveyed repo.

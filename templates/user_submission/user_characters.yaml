@@ -1,0 +1,21 @@
+# user_characters.yaml — 用户供稿人物表（source: user，锁定）
+# 人物名全书一致；小名、别称必须登记在 aliases 里，正文才能用。
+characters:
+  - name: 陆时安
+    age: 34
+    role: 主角
+    want: 弄清楚照片里的人去哪了
+    flaw: 习惯用镜头隔着看人
+    aliases: [时安]
+  - name: 陈桂香
+    age: 82
+    role: 奶奶
+    want: 等儿子回来吃饭
+    flaw: 记性时好时坏
+    aliases: [奶奶]
+  - name: 阿豆
+    age: 9
+    role: 留守儿童
+    want: 爸爸妈妈过年回来
+    flaw: 太懂事
+    aliases: []

@@ -1,12 +1,15 @@
 import React, { useRef, useState } from 'react';
 import { ArchiveRestore, BookPlus, FileUp, Sparkles, X } from 'lucide-react';
-import type { BookProject, MarketScanRecord, NovelLanguage } from '../shared/types.ts';
+import type { BookProject, MarketScanRecord, NovelLanguage, SequelSeed } from '../shared/types.ts';
 import { formatChapterTitle, GENRE_PACKS, LANGUAGE_SPECS } from '../shared/skillSpecs.ts';
 import {
   createBookApi,
+  draftEndingApi,
   generateBibleApi,
   importManuscriptApi,
+  importSeedApi,
   marketScanApi,
+  readJsonFile,
 } from '../lib/api.ts';
 
 interface NewBookModalProps {
@@ -16,7 +19,7 @@ interface NewBookModalProps {
   onImportBackupFile?: (file: File) => Promise<void>;
 }
 
-type ModalMode = 'wizard' | 'import' | 'blank' | 'backup';
+type ModalMode = 'wizard' | 'import' | 'blank' | 'backup' | 'seed';
 
 export const NewBookModal: React.FC<NewBookModalProps> = ({
   isOpen,
@@ -42,6 +45,16 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
   const [blankLeadName, setBlankLeadName] = useState('');
   const [blankLeadRole, setBlankLeadRole] = useState('主角');
   const [blankPremise, setBlankPremise] = useState('');
+
+  // Seed import state
+  const [seedTitle, setSeedTitle] = useState('');
+
+  // 终局规划（手册 §五.1）：长篇默认目标 100 章；短篇用目标字数；结局可留空。
+  const [targetMode, setTargetMode] = useState<'long' | 'short'>('long');
+  const [longTarget, setLongTarget] = useState('100');
+  const [shortWords, setShortWords] = useState('10000');
+  const [endingSummary, setEndingSummary] = useState('');
+  const [plannedEnding, setPlannedEnding] = useState('');
 
   const [busy, setBusy] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -91,6 +104,14 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
     setErrorMsg(null);
     setBusy('bible');
     try {
+      const parsedTarget =
+        targetMode === 'long' && longTarget.trim() !== '' ? Number(longTarget) : undefined;
+      if (parsedTarget != null && (!Number.isFinite(parsedTarget) || parsedTarget < 1)) {
+        setErrorMsg('目标章数须为正整数，留空则为无终点自由连载。');
+        return;
+      }
+      const parsedWords =
+        targetMode === 'short' && shortWords.trim() !== '' ? Number(shortWords) : undefined;
       const generated = await generateBibleApi({
         seedIdea,
         platform,
@@ -98,6 +119,9 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
         language,
         marketScan: scanResult || undefined,
         preferredNames: preferredNames.trim() || undefined,
+        endingSummary: endingSummary.trim() || undefined,
+        plannedEnding: plannedEnding.trim() || undefined,
+        targetChapters: parsedTarget,
       });
 
       const now = new Date().toISOString();
@@ -111,9 +135,20 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
         formula: generated.formula,
         gate1Approved: true,
         gate2Approved: true,
+        bookStatus: 'ongoing',
+        outlineRevision: 1,
         marketScan: scanResult || undefined,
         bible: generated.bible,
-        outline: generated.outline,
+        outline: {
+          ...generated.outline,
+          compass: {
+            ...generated.outline.compass,
+            targetChapters: parsedTarget,
+            targetWords: parsedWords,
+            endingSummary: endingSummary.trim() || undefined,
+            plannedEnding: plannedEnding.trim() || undefined,
+          },
+        },
         state: generated.state,
         chapters: [
           {
@@ -185,6 +220,88 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
     }
   };
 
+  const handleDraftEndingForNew = async () => {
+    const premise = mode === 'blank' ? blankPremise.trim() : seedIdea.trim();
+    if (!premise) {
+      setErrorMsg('请先输入核心灵感或一句话前提，再让 AI 拟定结局草案。');
+      return;
+    }
+    setErrorMsg(null);
+    setBusy('ending');
+    try {
+      const now = new Date().toISOString();
+      const shell: BookProject = {
+        id: `book-draft-${Date.now()}`,
+        title: mode === 'blank' ? blankTitle.trim() || '未命名' : '未命名新书',
+        language,
+        platform,
+        genreId,
+        formula: 'draft',
+        gate1Approved: false,
+        gate2Approved: false,
+        bookStatus: 'ongoing',
+        outlineRevision: 1,
+        bible: {
+          premise,
+          era: '',
+          setting: '',
+          worldRules: '',
+          locations: [],
+          hardConstraints: [],
+          cultureAnchors: { clothing: '', food: '', objects: '', landscape: '', colour: '' },
+          voice: { narrator: '', dialogueDistinctness: '', customBanned: [] },
+          characters: [],
+        },
+        outline: {
+          compass: {
+            endDirection: '',
+            activeLongThreads: '',
+            scaleEstimate: '',
+            centralQuestion: premise,
+            whatBookIsNot: '',
+          },
+          currentArc: { rangeLabel: '', goal: '', beats: [], payoff: '', newElementsNote: '' },
+          roadmap: [],
+        },
+        state: {
+          committedChapters: [],
+          nextChapter: 1,
+          summaries: [],
+          characterStates: [],
+          foreshadowing: [],
+          knows: [],
+          timeline: [],
+        },
+        chapters: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      const draft = await draftEndingApi(shell);
+      setEndingSummary(draft.endingSummary);
+      setPlannedEnding(draft.plannedEnding);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleImportSeedFile = async (file: File | undefined) => {
+    if (!file) return;
+    setErrorMsg(null);
+    setBusy('seed');
+    try {
+      const doc = (await readJsonFile(file)) as SequelSeed;
+      const book = await importSeedApi(doc, seedTitle.trim());
+      onCreated(book);
+      onClose();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const handleCreateBlank = async () => {
     const cleanLead = blankLeadName.trim();
     if (!blankTitle.trim() || !blankPremise.trim() || !cleanLead) {
@@ -195,6 +312,14 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
     setBusy('blank');
     try {
       const now = new Date().toISOString();
+      const parsedTarget =
+        targetMode === 'long' && longTarget.trim() !== '' ? Number(longTarget) : undefined;
+      if (parsedTarget != null && (!Number.isFinite(parsedTarget) || parsedTarget < 1)) {
+        setErrorMsg('目标章数须为正整数，留空则为无终点自由连载。');
+        return;
+      }
+      const parsedWords =
+        targetMode === 'short' && shortWords.trim() !== '' ? Number(shortWords) : undefined;
       const blankBook: BookProject = {
         id: `book-${Date.now()}`,
         title: blankTitle.trim(),
@@ -204,6 +329,8 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
         formula: 'custom-long-serial',
         gate1Approved: true,
         gate2Approved: true,
+        bookStatus: 'ongoing',
+        outlineRevision: 1,
         bible: {
           premise: blankPremise.trim(),
           era: language === 'zh' ? '待定时代' : 'Contemporary',
@@ -244,6 +371,10 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
             scaleEstimate: '120–180 章',
             centralQuestion: blankPremise.trim(),
             whatBookIsNot: '不写与核心前提冲突的水字桥段',
+            targetChapters: parsedTarget,
+            targetWords: parsedWords,
+            endingSummary: endingSummary.trim() || undefined,
+            plannedEnding: plannedEnding.trim() || undefined,
           },
           currentArc: {
             rangeLabel: '第 1–30 章',
@@ -384,6 +515,15 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
             >
               空白模板建书
             </button>
+            <button
+              type="button"
+              onClick={() => setMode('seed')}
+              className={`px-3.5 py-1.5 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap shrink-0 ${
+                mode === 'seed' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-600'
+              }`}
+            >
+              续作种子导入
+            </button>
             {onImportBackupFile && (
               <button
                 type="button"
@@ -449,7 +589,7 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
           )}
 
           {/* Language & Platform shared row */}
-          {mode !== 'backup' && (
+          {mode !== 'backup' && mode !== 'seed' && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs font-medium text-zinc-700 mb-1">语言</label>
@@ -458,7 +598,7 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
                   onChange={(e) => handleLanguageChange(e.target.value as NovelLanguage)}
                   className="w-full px-3 py-2 text-sm border border-zinc-300 rounded-lg bg-white"
                 >
-                  <option value="zh">中文 (2000–4000 字/章)</option>
+                  <option value="zh">中文 (2100–4000 字/章)</option>
                   <option value="en">English (1500–2500 words/ch)</option>
                 </select>
               </div>
@@ -492,6 +632,126 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
                   </select>
                 </div>
               )}
+            </div>
+          )}
+
+          {mode !== 'import' && mode !== 'seed' && mode !== 'backup' && (
+            <div className="p-4 bg-zinc-50 border border-zinc-200 rounded-xl flex flex-col gap-4">
+              <div>
+                <div className="text-xs font-semibold text-zinc-800 mb-2">
+                  篇幅与目标（有终点、可浮动；留空=无终点自由连载）
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTargetMode('long')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg cursor-pointer ${
+                      targetMode === 'long'
+                        ? 'bg-zinc-900 text-white'
+                        : 'bg-white border border-zinc-300 text-zinc-700'
+                    }`}
+                  >
+                    长篇连载
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTargetMode('short')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg cursor-pointer ${
+                      targetMode === 'short'
+                        ? 'bg-zinc-900 text-white'
+                        : 'bg-white border border-zinc-300 text-zinc-700'
+                    }`}
+                  >
+                    短篇（按字数）
+                  </button>
+                  {targetMode === 'long' ? (
+                    <>
+                      {[50, 80, 100, 150, 250].map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setLongTarget(String(n))}
+                          className={`px-2.5 py-1.5 text-xs rounded-lg cursor-pointer ${
+                            longTarget === String(n)
+                              ? 'bg-blue-700 text-white'
+                              : 'bg-white border border-zinc-300 text-zinc-700'
+                          }`}
+                        >
+                          {n} 章
+                        </button>
+                      ))}
+                      <input
+                        type="number"
+                        value={longTarget}
+                        onChange={(e) => setLongTarget(e.target.value)}
+                        placeholder="自定义"
+                        className="w-24 px-2 py-1.5 text-xs border border-zinc-300 rounded-lg bg-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setLongTarget('')}
+                        className="px-2.5 py-1.5 text-xs text-zinc-600 border border-zinc-300 rounded-lg bg-white cursor-pointer"
+                      >
+                        清空
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {[5000, 10000, 20000].map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setShortWords(String(n))}
+                          className={`px-2.5 py-1.5 text-xs rounded-lg cursor-pointer ${
+                            shortWords === String(n)
+                              ? 'bg-blue-700 text-white'
+                              : 'bg-white border border-zinc-300 text-zinc-700'
+                          }`}
+                        >
+                          {n.toLocaleString()} 字
+                        </button>
+                      ))}
+                      <input
+                        type="number"
+                        value={shortWords}
+                        onChange={(e) => setShortWords(e.target.value)}
+                        placeholder="自定义字数"
+                        className="w-28 px-2 py-1.5 text-xs border border-zinc-300 rounded-lg bg-white"
+                      />
+                    </>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold text-zinc-800 mb-2">
+                  结局设定（可留空直接开写）
+                </div>
+                <input
+                  type="text"
+                  value={endingSummary}
+                  onChange={(e) => setEndingSummary(e.target.value)}
+                  placeholder="一句话核心结局（可选）"
+                  className="w-full px-3 py-2 text-sm border border-zinc-300 rounded-lg bg-white mb-2"
+                />
+                <textarea
+                  rows={2}
+                  value={plannedEnding}
+                  onChange={(e) => setPlannedEnding(e.target.value)}
+                  placeholder="完整终局蓝图（可选，3 落点：终局高潮、人物归宿、核心问题答案）"
+                  className="w-full px-3 py-2 text-sm border border-zinc-300 rounded-lg bg-white"
+                />
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={handleDraftEndingForNew}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg cursor-pointer disabled:opacity-50"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>{busy === 'ending' ? '拟定中...' : 'AI 拟定结局草案'}</span>
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -607,6 +867,9 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
                   <span>{busy === 'import' ? '反推重建正史中...' : '导入并反推故事圣经提案'}</span>
                 </button>
               </div>
+              <p className="text-xs text-zinc-500">
+                导入的旧稿默认不设目标章数（老书退化、自由连载），建好后可到台账页补填目标与结局。
+              </p>
             </div>
           )}
 
@@ -670,6 +933,50 @@ export const NewBookModal: React.FC<NewBookModalProps> = ({
                   {busy === 'blank' ? '创建中...' : '从空白模板创建工程'}
                 </button>
               </div>
+            </div>
+          )}
+
+          {mode === 'seed' && (
+            <div className="flex flex-col gap-4">
+              <div>
+                <label className="block text-xs font-medium text-zinc-700 mb-1.5">
+                  续作书名
+                </label>
+                <input
+                  type="text"
+                  value={seedTitle}
+                  onChange={(e) => setSeedTitle(e.target.value)}
+                  placeholder="默认使用种子里的续作标题"
+                  className="w-full px-3 py-2 text-sm border border-zinc-300 rounded-lg"
+                />
+              </div>
+              <label className="flex flex-col items-center justify-center p-6 border border-dashed border-zinc-300 rounded-xl cursor-pointer hover:bg-zinc-50">
+                <FileUp className="w-5 h-5 text-zinc-500 mb-2" />
+                <span className="text-sm font-medium text-zinc-800">
+                  选择续作种子 JSON 文件
+                </span>
+                <span className="text-xs text-zinc-500 mt-1">
+                  由已完结书的「导出续作种子」生成（seedVersion 1）
+                </span>
+                <input
+                  type="file"
+                  accept=".json"
+                  className="hidden"
+                  onChange={(e) => handleImportSeedFile(e.target.files?.[0])}
+                />
+              </label>
+              <p className="text-xs text-zinc-500">
+                导入后创建一本新书：续作人物与未结线带过来，目标章数留空（开写后再定），
+                书名为种子标题（或上方填写的书名）。
+              </p>
+              <button
+                type="button"
+                disabled={busy !== null}
+                onClick={() => document.querySelector<HTMLInputElement>('input[type="file"][accept=".json"]')?.click()}
+                className="px-4 py-2 text-sm font-medium bg-blue-700 hover:bg-blue-800 text-white rounded-lg cursor-pointer disabled:opacity-50"
+              >
+                {busy === 'seed' ? '导入中...' : '选择种子文件导入'}
+              </button>
             </div>
           )}
         </div>
